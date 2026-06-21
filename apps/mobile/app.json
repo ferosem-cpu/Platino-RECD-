@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "RECD Tracker",
+    "slug": "recd-tracker",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.platino.recdtracker"
+    },
+    "android": {
+      "package": "com.platino.recdtracker"
+    },
+    "extra": {
+      "apiUrl": "http://localhost:4000"
+    }
+  }
+}

@@ -1,0 +1,361 @@
+// RECD Project & Service Tracker - data model
+//
+// Design rule (see project memory): anything that might grow a new value
+// later - stages, statuses, roles, permissions, photo checkpoints, structure
+// types - is a row in a lookup table, never a hardcoded Prisma enum. Prisma
+// `enum` is used only for genuinely fixed, structural categories that are
+// not expected to grow (e.g. pending-action owner type, complaint severity).
+// Well-known lookup-table `key` values that application code branches on
+// live in packages/shared/src/constants.ts and must match the seed data.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth, roles, permissions
+// ---------------------------------------------------------------------------
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  users       User[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model User {
+  id                  String   @id @default(cuid())
+  name                String
+  email               String?  @unique
+  phone               String?  @unique
+  passwordHash        String?
+  /// Informal job title shown in the UI only (e.g. "Proprietor", "CTO", "Fitter", "Welder") -
+  /// does not affect permissions, which come entirely from `role`.
+  title               String?
+  roleId              String
+  role                Role     @relation(fields: [roleId], references: [id])
+  customerId          String?
+  customer            Customer? @relation("CustomerContacts", fields: [customerId], references: [id])
+  notificationChannels Json?   // array of NotificationChannel keys the user has opted into
+  createdAt           DateTime @default(now())
+
+  salesOrders          Order[]            @relation("SalesEngineer")
+  customersOwned       Customer[]         @relation("CustomerSalesOwner")
+  assignedSites        Site[]             @relation("AssignedEngineer")
+  stageEventsCreated   SiteStageEvent[]
+  photosUploaded       SitePhoto[]
+  complaintsAssigned   Complaint[]        @relation("AssignedTo")
+  pendingActionsOwned  PendingAction[]    @relation("InternalOwner")
+  usersCreated         User[]             @relation("CreatedBy")
+  createdById          String?
+  createdBy            User?              @relation("CreatedBy", fields: [createdById], references: [id])
+  otpCodes             OtpCode[]
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Customers & products
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id            String   @id @default(cuid())
+  name          String
+  address       String?
+  salesOwnerId  String?
+  salesOwner    User?    @relation("CustomerSalesOwner", fields: [salesOwnerId], references: [id])
+  createdAt     DateTime @default(now())
+
+  contacts  User[]   @relation("CustomerContacts")
+  orders    Order[]
+  complaints Complaint[]
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  name           String
+  model          String   @unique
+  ratingSpec     String?
+  /// Drives structure/scaffold sizing later - RECD weight scales proportionately with this.
+  capacityKva    Decimal? @db.Decimal(10, 2)
+  warrantyMonths Int?
+  createdAt      DateTime @default(now())
+
+  orders Order[]
+}
+
+// ---------------------------------------------------------------------------
+// Orders & sites
+// ---------------------------------------------------------------------------
+
+model Order {
+  id                       String    @id @default(cuid())
+  orderNumber              String    @unique
+  customerId               String
+  customer                 Customer  @relation(fields: [customerId], references: [id])
+  productId                String
+  product                  Product   @relation(fields: [productId], references: [id])
+  quantity                 Int
+  value                    Decimal   @db.Decimal(12, 2)
+  orderDate                DateTime
+  promisedDeliveryDate     DateTime?
+  actualDispatchDate       DateTime?
+  /// Set by the sales engineer at order time - "replace_existing_silencer" | "add_after_existing_exhaust"
+  plannedExhaustHookupType String?
+  salesEngineerId          String?
+  salesEngineer            User?     @relation("SalesEngineer", fields: [salesEngineerId], references: [id])
+  createdAt                DateTime  @default(now())
+
+  site Site?
+}
+
+model Site {
+  id      String @id @default(cuid())
+  orderId String @unique
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  address           String?
+  gpsLat            Decimal? @db.Decimal(9, 6)
+  gpsLng            Decimal? @db.Decimal(9, 6)
+  assignedEngineerId String?
+  assignedEngineer   User?   @relation("AssignedEngineer", fields: [assignedEngineerId], references: [id])
+
+  currentStageId String
+  currentStage   StageDefinition @relation(fields: [currentStageId], references: [id])
+
+  /// Set by the erection engineer on-site once they've seen the generator. If it differs
+  /// from order.plannedExhaustHookupType, see the PendingAction created for customer approval.
+  confirmedExhaustHookupType String?
+
+  // Structure / scaffold module - schema ready now, no UI behind it until Phase 2.
+  dgCapacityKva        Decimal?  @db.Decimal(10, 2)
+  dgModel              String?
+  structureTypeId      String?
+  structureType        StructureType? @relation(fields: [structureTypeId], references: [id])
+  structureDimensions  Json?
+  structureDiagramUrl  String?
+  structureDiagramStatus String? // null | "pending" | "ready" - stays "pending" until Phase 2 engine exists
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stageEvents     SiteStageEvent[]
+  photos          SitePhoto[]
+  pendingActions  PendingAction[]
+  complaints      Complaint[]
+}
+
+// ---------------------------------------------------------------------------
+// SITC stages & field status updates - lookup tables, not enums
+// ---------------------------------------------------------------------------
+
+enum SitcPhase {
+  SUPPLY
+  INSTALLATION
+  TESTING
+  COMMISSIONING
+}
+
+model StageDefinition {
+  id            String    @id @default(cuid())
+  key           String    @unique
+  label         String
+  phase         SitcPhase
+  sequenceOrder Int
+  createdAt     DateTime  @default(now())
+
+  sites       Site[]
+  stageEvents SiteStageEvent[]
+}
+
+/// Domain distinguishes which workflow a status option belongs to, so one table
+/// can serve site-stage updates now and other workflows later without new tables.
+model StatusOption {
+  id              String   @id @default(cuid())
+  domain          String   @default("site_stage")
+  key             String
+  label           String
+  requiresComment Boolean  @default(true)
+  sequenceOrder   Int
+  createdAt       DateTime @default(now())
+
+  stageEvents SiteStageEvent[]
+
+  @@unique([domain, key])
+}
+
+model SiteStageEvent {
+  id                String          @id @default(cuid())
+  siteId            String
+  site              Site            @relation(fields: [siteId], references: [id])
+  stageDefinitionId String
+  stageDefinition   StageDefinition @relation(fields: [stageDefinitionId], references: [id])
+  statusOptionId    String
+  statusOption      StatusOption    @relation(fields: [statusOptionId], references: [id])
+  comment           String
+  photoUrl          String?
+  createdById       String
+  createdBy         User            @relation(fields: [createdById], references: [id])
+  createdAt         DateTime        @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Photo checkpoints
+// ---------------------------------------------------------------------------
+
+model PhotoCheckpoint {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  label         String
+  sequenceOrder Int
+  createdAt     DateTime @default(now())
+
+  photos SitePhoto[]
+}
+
+model SitePhoto {
+  id           String          @id @default(cuid())
+  siteId       String
+  site         Site            @relation(fields: [siteId], references: [id])
+  checkpointId String
+  checkpoint   PhotoCheckpoint @relation(fields: [checkpointId], references: [id])
+  photoUrl     String
+  caption      String?
+  uploadedById String
+  uploadedBy   User            @relation(fields: [uploadedById], references: [id])
+  uploadedAt   DateTime        @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Structure diagram module - Phase 2, schema ready now
+// ---------------------------------------------------------------------------
+
+model StructureType {
+  id              String   @id @default(cuid())
+  key             String   @unique
+  name            String
+  /// JSON schema describing the parameters this structure type takes
+  /// (e.g. dgCapacityKva, footprintLength, footprintWidth, platformHeight,
+  /// legCount, bracingPattern, material, recdMountHeight).
+  parameterSchema Json
+  createdAt       DateTime @default(now())
+
+  sites    Site[]
+  examples StructureTemplateExample[]
+}
+
+model StructureTemplateExample {
+  id              String        @id @default(cuid())
+  structureTypeId String
+  structureType   StructureType @relation(fields: [structureTypeId], references: [id])
+  imageUrl        String
+  parameters      Json
+  notes           String?
+  uploadedById    String
+  uploadedAt      DateTime      @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Pending actions (customer/internal/vendor approvals and blockers)
+// ---------------------------------------------------------------------------
+
+enum PendingActionOwnerType {
+  INTERNAL
+  CUSTOMER
+  VENDOR
+}
+
+model PendingAction {
+  id              String                 @id @default(cuid())
+  siteId          String
+  site            Site                   @relation(fields: [siteId], references: [id])
+  /// e.g. "customer_approval", "material_shortage", "customer_signoff_pending" - see
+  /// PENDING_ACTION_CATEGORY in packages/shared. Free-form on purpose; not a lookup
+  /// table since these are created by code paths, not picked from a UI dropdown.
+  category        String
+  description     String
+  ownerType       PendingActionOwnerType
+  ownerUserId     String?
+  ownerUser       User?                  @relation("InternalOwner", fields: [ownerUserId], references: [id])
+  dueDate         DateTime?
+  priority        String                 @default("medium") // low | medium | high | critical
+  status          String                 @default("open")   // open | resolved
+  escalationLevel Int                    @default(0)
+  resolution      String?
+  createdAt       DateTime               @default(now())
+  resolvedAt      DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// Complaints
+// ---------------------------------------------------------------------------
+
+model Complaint {
+  id             String    @id @default(cuid())
+  ticketNumber   String    @unique
+  customerId     String
+  customer       Customer  @relation(fields: [customerId], references: [id])
+  siteId         String?
+  site           Site?     @relation(fields: [siteId], references: [id])
+  category       String    // erection_commissioning | delivery_delay | non_performance
+  description    String
+  severity       String    // low | medium | high | critical
+  status         String    @default("open") // see COMPLAINT_STATUS in packages/shared
+  assignedToId   String?
+  assignedTo     User?     @relation("AssignedTo", fields: [assignedToId], references: [id])
+  rootCause      String?
+  resolutionNotes String?
+  createdAt      DateTime  @default(now())
+  closedAt       DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+model NotificationLog {
+  id            String   @id @default(cuid())
+  recipientId   String
+  channel       String   // in_app | email | sms | whatsapp | telegram
+  templateKey   String
+  payload       Json
+  /// "sent" for live channels, "pending_provider_setup" for stubbed channels (sms/whatsapp/telegram)
+  status        String
+  sentAt        DateTime?
+  createdAt     DateTime @default(now())
+}

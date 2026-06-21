@@ -1,0 +1,23 @@
+{
+  "name": "recd-tracker",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "db:migrate": "npm run db:migrate --workspace=apps/api",
+    "db:seed": "npm run db:seed --workspace=apps/api"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.0",
+    "typescript": "^5.6.0",
+    "prettier": "^3.3.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
