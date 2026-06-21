@@ -3,6 +3,7 @@ import { resolvePendingActionSchema, PERMISSION_KEY, PENDING_ACTION_CATEGORY, EX
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
+import { asString } from "../lib/params";
 
 export const pendingActionsRouter = Router();
 pendingActionsRouter.use(authenticate);
@@ -32,7 +33,7 @@ pendingActionsRouter.post(
     const parsed = resolvePendingActionSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const action = await prisma.pendingAction.findUnique({ where: { id: req.params.id }, include: { site: true } });
+    const action = await prisma.pendingAction.findUnique({ where: { id: asString(req.params.id) }, include: { site: true } });
     if (!action) return res.status(404).json({ error: "Pending action not found" });
 
     const updated = await prisma.pendingAction.update({

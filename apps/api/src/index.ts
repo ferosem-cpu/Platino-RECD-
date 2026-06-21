@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
 import cors from "cors";
 import { authRouter } from "./routes/auth";
 import { ordersRouter } from "./routes/orders";
@@ -24,6 +24,15 @@ app.use("/pending-actions", pendingActionsRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/users", usersRouter);
 app.use("/meta", lookupsRouter);
+
+// Catches anything a route handler throws or rejects with (Express 5 forwards rejected
+// async handlers here automatically) so a downstream failure - like the database being
+// unreachable - returns a clean error response instead of crashing the process.
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ error: "Internal server error" });
+};
+app.use(errorHandler);
 
 const port = Number(process.env.PORT) || 4000;
 app.listen(port, () => {

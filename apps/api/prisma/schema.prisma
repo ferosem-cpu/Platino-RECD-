@@ -13,8 +13,12 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Transaction-mode pooler (IPv4, pgbouncer) - what the running app uses for queries.
+  url       = env("DATABASE_URL")
+  // Session-mode pooler - what `prisma migrate` uses; transaction-mode pgbouncer doesn't
+  // reliably support the advisory locks and DDL migrations need.
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------------------

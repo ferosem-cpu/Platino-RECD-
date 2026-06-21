@@ -9,6 +9,7 @@ import {
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
+import { asString, asOptionalString } from "../lib/params";
 
 export const sitesRouter = Router();
 sitesRouter.use(authenticate);
@@ -21,7 +22,7 @@ async function assertSiteVisible(siteId: string, auth: AuthenticatedRequest["aut
 }
 
 sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
-  const assignedToMe = req.query.assigned_to === "me";
+  const assignedToMe = asOptionalString(req.query.assigned_to) === "me";
   const where: Record<string, unknown> = {};
   if (assignedToMe) where.assignedEngineerId = req.auth!.userId;
   if (req.auth!.customerId) where.order = { customerId: req.auth!.customerId };
@@ -35,12 +36,13 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
 });
 
 sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
-  const site = await assertSiteVisible(req.params.id, req.auth);
+  const siteId = asString(req.params.id);
+  const site = await assertSiteVisible(siteId, req.auth);
   if (site === null) return res.status(404).json({ error: "Site not found" });
   if (site === undefined) return res.status(403).json({ error: "Forbidden" });
 
   const detail = await prisma.site.findUnique({
-    where: { id: req.params.id },
+    where: { id: siteId },
     include: {
       order: { include: { customer: true } },
       currentStage: true,
@@ -63,7 +65,7 @@ sitesRouter.post(
     const parsed = createStageEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const site = await prisma.site.findUnique({ where: { id: req.params.id }, include: { order: true } });
+    const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, include: { order: true } });
     if (!site) return res.status(404).json({ error: "Site not found" });
 
     const [event] = await prisma.$transaction([
@@ -106,7 +108,7 @@ sitesRouter.post(
     const parsed = confirmExhaustHookupSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const site = await prisma.site.findUnique({ where: { id: req.params.id }, include: { order: true } });
+    const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, include: { order: true } });
     if (!site) return res.status(404).json({ error: "Site not found" });
 
     if (parsed.data.matchesPlan) {
@@ -147,7 +149,7 @@ sitesRouter.post("/:id/photos", requirePermission(PERMISSION_KEY.CHANGE_SITE_STA
 
   const photo = await prisma.sitePhoto.create({
     data: {
-      siteId: req.params.id,
+      siteId: asString(req.params.id),
       checkpointId: parsed.data.checkpointId,
       photoUrl: parsed.data.photoUrl,
       caption: parsed.data.caption,

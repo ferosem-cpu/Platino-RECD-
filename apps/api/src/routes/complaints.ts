@@ -3,6 +3,7 @@ import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COM
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
+import { asString } from "../lib/params";
 
 export const complaintsRouter = Router();
 complaintsRouter.use(authenticate);
@@ -58,7 +59,7 @@ complaintsRouter.patch("/:id", requirePermission(PERMISSION_KEY.MANAGE_COMPLAINT
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const complaint = await prisma.complaint.update({
-    where: { id: req.params.id },
+    where: { id: asString(req.params.id) },
     data: {
       status: parsed.data.status,
       rootCause: parsed.data.rootCause,
