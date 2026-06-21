@@ -9,6 +9,7 @@ import { pendingActionsRouter } from "./routes/pendingActions";
 import { dashboardRouter } from "./routes/dashboard";
 import { usersRouter } from "./routes/users";
 import { lookupsRouter } from "./routes/lookups";
+import { settingsRouter } from "./routes/settings";
 
 const app = express();
 app.use(cors());
@@ -23,6 +24,7 @@ app.use("/complaints", complaintsRouter);
 app.use("/pending-actions", pendingActionsRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/users", usersRouter);
+app.use("/settings", settingsRouter);
 app.use("/meta", lookupsRouter);
 
 // Catches anything a route handler throws or rejects with (Express 5 forwards rejected

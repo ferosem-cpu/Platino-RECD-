@@ -65,6 +65,15 @@ export const createUserSchema = z.object({
   email: z.string().email(),
   roleKey: z.string(),
   phone: z.string().optional(),
+  title: z.string().optional(),
+});
+
+export const updateUserSchema = z.object({
+  name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  roleKey: z.string().optional(),
+  phone: z.string().optional(),
+  title: z.string().optional(),
 });
 
 export const notificationPreferenceSchema = z.object({

@@ -60,6 +60,8 @@ model User {
   email               String?  @unique
   phone               String?  @unique
   passwordHash        String?
+  isActive            Boolean  @default(true)
+  mustChangePassword  Boolean  @default(true)
   /// Informal job title shown in the UI only (e.g. "Proprietor", "CTO", "Fitter", "Welder") -
   /// does not affect permissions, which come entirely from `role`.
   title               String?
@@ -362,4 +364,11 @@ model NotificationLog {
   status        String
   sentAt        DateTime?
   createdAt     DateTime @default(now())
+}
+
+model CompanySettings {
+  id            String   @id @default("singleton")
+  logoDataUrl   String?
+  themeKey      String   @default("emerald")
+  customColors  Json?
 }

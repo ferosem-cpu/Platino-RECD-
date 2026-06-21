@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import Nav from "@/components/Nav";
+import ThemeInitializer from "@/components/ThemeInitializer";
+import { AuthProvider } from "@/components/AuthContext";
+import AuthGuard from "@/components/AuthGuard";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -11,10 +13,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="bg-gray-50 text-gray-900">
-        <div className="flex min-h-screen">
-          <Nav />
-          <main className="flex-1 p-8">{children}</main>
-        </div>
+        <AuthProvider>
+          <ThemeInitializer />
+          <AuthGuard>{children}</AuthGuard>
+        </AuthProvider>
       </body>
     </html>
   );

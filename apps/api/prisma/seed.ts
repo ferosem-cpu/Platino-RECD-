@@ -21,6 +21,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.MANAGE_ORDERS, name: "Create / manage orders" },
     { key: PERMISSION_KEY.MANAGE_USERS, name: "Add users and assign roles" },
     { key: PERMISSION_KEY.RESOLVE_PENDING_ACTION, name: "Resolve a pending action" },
+    { key: PERMISSION_KEY.MANAGE_SETTINGS, name: "Manage company settings and theming" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -31,15 +32,20 @@ const ALL_PERMISSIONS = Object.values(PERMISSION_KEY);
 
 async function seedRoles() {
   const roles: Record<string, { name: string; description: string; permissions: string[] }> = {
+    [ROLE_KEY.SUPER_ADMIN]: {
+      name: "Super Admin",
+      description: "Root-level administrator. Full access to settings, user management, and configuration.",
+      permissions: ALL_PERMISSIONS,
+    },
     [ROLE_KEY.OWNER_ADMIN]: {
       name: "Owner / Admin",
-      description: "Proprietor, Owner, CEO, or CTO. Full system rights - user management, permission assignment, and full visibility.",
-      permissions: ALL_PERMISSIONS,
+      description: "Proprietor, Owner, CEO, or CTO. Full standard administrative permissions.",
+      permissions: ALL_PERMISSIONS.filter((p) => p !== PERMISSION_KEY.MANAGE_SETTINGS),
     },
     [ROLE_KEY.MANAGEMENT]: {
       name: "Management",
-      description: "Senior managers below owner level.",
-      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.VIEW_DASHBOARD, PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW],
+      description: "Senior managers below owner level. Full standard administrative permissions.",
+      permissions: ALL_PERMISSIONS.filter((p) => p !== PERMISSION_KEY.MANAGE_SETTINGS),
     },
     [ROLE_KEY.SALES]: {
       name: "Sales",
@@ -149,7 +155,8 @@ async function seedSampleUsers() {
   const roleIdByKey = new Map(roleEntries.map((r) => [r.key, r.id]));
 
   const internalUsers = [
-    { name: "Priya Sharma", email: "owner@platino.example", roleKey: ROLE_KEY.OWNER_ADMIN, title: "Proprietor" },
+    { name: "Super Admin", email: "superadmin@platino.example", roleKey: ROLE_KEY.SUPER_ADMIN, title: "Super Admin" },
+    { name: "Priya Sharma", email: "owner@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Proprietor" },
     { name: "Anil Mehta", email: "management@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Operations Head" },
     { name: "Rahul Verma", email: "sales@platino.example", roleKey: ROLE_KEY.SALES, title: "Sales Engineer" },
     { name: "Sunil Rao", email: "ops@platino.example", roleKey: ROLE_KEY.OPERATIONS_PM, title: "Project Manager" },
@@ -162,13 +169,19 @@ async function seedSampleUsers() {
   for (const u of internalUsers) {
     await prisma.user.upsert({
       where: { email: u.email },
-      update: {},
+      update: {
+        roleId: roleIdByKey.get(u.roleKey)!,
+        isActive: true,
+        mustChangePassword: false,
+      },
       create: {
         name: u.name,
         email: u.email,
         passwordHash,
         title: u.title,
         roleId: roleIdByKey.get(u.roleKey)!,
+        isActive: true,
+        mustChangePassword: false,
       },
     });
   }
@@ -185,13 +198,19 @@ async function seedSampleUsers() {
 
   await prisma.user.upsert({
     where: { email: "customer@sundaram.example" },
-    update: {},
+    update: {
+      roleId: roleIdByKey.get(ROLE_KEY.CUSTOMER)!,
+      isActive: true,
+      mustChangePassword: false,
+    },
     create: {
       name: "Suresh Sundaram",
       email: "customer@sundaram.example",
       phone: "+919900011122",
       roleId: roleIdByKey.get(ROLE_KEY.CUSTOMER)!,
       customerId: customer.id,
+      isActive: true,
+      mustChangePassword: false,
     },
   });
 
@@ -241,6 +260,19 @@ async function seedSampleOrder(customerId: string) {
   return order;
 }
 
+async function seedCompanySettings() {
+  await prisma.companySettings.upsert({
+    where: { id: "singleton" },
+    update: {},
+    create: {
+      id: "singleton",
+      themeKey: "emerald",
+      logoDataUrl: null,
+      customColors: null,
+    },
+  });
+}
+
 async function main() {
   await seedPermissions();
   await seedRoles();
@@ -249,6 +281,7 @@ async function main() {
   await seedPhotoCheckpoints();
   const { customer } = await seedSampleUsers();
   await seedSampleOrder(customer.id);
+  await seedCompanySettings();
   console.log("Seed complete.");
 }
 

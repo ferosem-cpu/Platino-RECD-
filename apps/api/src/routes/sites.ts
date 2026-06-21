@@ -44,7 +44,7 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
   const detail = await prisma.site.findUnique({
     where: { id: siteId },
     include: {
-      order: { include: { customer: true } },
+      order: { include: { customer: true, product: true } },
       currentStage: true,
       assignedEngineer: true,
       stageEvents: {

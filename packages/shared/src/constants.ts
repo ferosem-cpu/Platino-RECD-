@@ -47,6 +47,7 @@ export const PHOTO_CHECKPOINT_KEY = {
 export type PhotoCheckpointKey = (typeof PHOTO_CHECKPOINT_KEY)[keyof typeof PHOTO_CHECKPOINT_KEY];
 
 export const ROLE_KEY = {
+  SUPER_ADMIN: "super_admin",
   OWNER_ADMIN: "owner_admin",
   MANAGEMENT: "management",
   SALES: "sales",
@@ -69,6 +70,7 @@ export const PERMISSION_KEY = {
   MANAGE_ORDERS: "manage_orders",
   MANAGE_USERS: "manage_users",
   RESOLVE_PENDING_ACTION: "resolve_pending_action",
+  MANAGE_SETTINGS: "manage_settings",
 } as const;
 export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];
 
