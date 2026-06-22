@@ -41,6 +41,10 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
 app.use(errorHandler);
 
 const port = Number(process.env.PORT) || 4000;
-app.listen(port, () => {
-  console.log(`API listening on http://localhost:${port}`);
-});
+if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`API listening on http://localhost:${port}`);
+  });
+}
+
+export default app;
