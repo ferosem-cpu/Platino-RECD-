@@ -46,17 +46,13 @@ export default function LoginPage() {
     setCustomerError(null);
     setOtpMessage(null);
     try {
-      const result = await api<{ ok: boolean; message: string; code?: string }>("/auth/customer/register", {
+      const result = await api<{ ok: boolean; message: string; devCode?: string }>("/auth/customer/register", {
         method: "POST",
         body: JSON.stringify({ orderNumber, phone }),
       });
       setOtpSent(true);
-      // For testing convenience, display the generated code in a developer banner
-      if (result.code) {
-        setOtpMessage(`OTP generated: ${result.code}`);
-      } else {
-        setOtpMessage("OTP sent to your registered contact number");
-      }
+      // In production the code only arrives by email; in dev the API echoes it back so we can test.
+      setOtpMessage(result.devCode ?? null);
     } catch (err) {
       setCustomerError(err instanceof Error ? err.message : "Failed to send OTP");
     } finally {
@@ -201,10 +197,16 @@ export default function LoginPage() {
               </form>
             ) : (
               <form onSubmit={handleCustomerVerifyOtp} className="space-y-4">
-                <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-sm text-emerald-800">
-                  <p className="font-medium">OTP Code generated for testing:</p>
-                  <p className="mt-1 font-mono font-bold text-base tracking-wider">{otpMessage}</p>
-                </div>
+                {otpMessage ? (
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-sm text-amber-800">
+                    <p className="font-medium">Dev mode - OTP (delivered by email in production):</p>
+                    <p className="mt-1 font-mono font-bold text-base tracking-wider">{otpMessage}</p>
+                  </div>
+                ) : (
+                  <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-sm text-emerald-800">
+                    A 6-digit code has been sent to the email registered for this order.
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Enter 6-digit OTP</label>
                   <input

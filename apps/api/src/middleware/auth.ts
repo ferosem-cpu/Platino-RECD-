@@ -18,17 +18,21 @@ export async function authenticate(req: AuthenticatedRequest, res: Response, nex
   }
   try {
     const payload = verifyToken(header.slice("Bearer ".length));
-    const role = await prisma.role.findUnique({
-      where: { key: payload.roleKey },
-      include: { permissions: { include: { permission: true } } },
+    // Load the user (not just the role) so we can (a) reject deactivated accounts whose
+    // tokens are still valid, and (b) reflect role/permission changes immediately rather
+    // than trusting the role baked into the token at sign-in time.
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      include: { role: { include: { permissions: { include: { permission: true } } } } },
     });
-    if (!role) return res.status(401).json({ error: "Unknown role" });
+    if (!user) return res.status(401).json({ error: "Unknown user" });
+    if (!user.isActive) return res.status(401).json({ error: "Account is inactive" });
 
     req.auth = {
-      userId: payload.userId,
-      roleKey: payload.roleKey,
-      customerId: payload.customerId,
-      permissions: new Set(role.permissions.map((rp) => rp.permission.key)),
+      userId: user.id,
+      roleKey: user.role.key,
+      customerId: user.customerId,
+      permissions: new Set(user.role.permissions.map((rp) => rp.permission.key)),
     };
     next();
   } catch {

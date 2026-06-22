@@ -53,6 +53,8 @@ export const updateComplaintStatusSchema = z.object({
   status: z.string(),
   rootCause: z.string().optional(),
   resolutionNotes: z.string().optional(),
+  /** Only complaint managers (service team / management) may (re)assign; field engineers cannot. */
+  assignedToId: z.string().nullable().optional(),
 });
 
 export const resolvePendingActionSchema = z.object({
@@ -78,4 +80,13 @@ export const updateUserSchema = z.object({
 
 export const notificationPreferenceSchema = z.object({
   channels: z.array(z.enum(["in_app", "email", "sms", "whatsapp", "telegram"])),
+});
+
+export const createCustomerSchema = z.object({
+  name: z.string().min(1),
+  address: z.string().optional(),
+  contactName: z.string().min(1),
+  // Phone is the customer's login credential (Order ID + phone -> OTP), so it is required.
+  contactPhone: z.string().min(6),
+  contactEmail: z.string().email().optional(),
 });

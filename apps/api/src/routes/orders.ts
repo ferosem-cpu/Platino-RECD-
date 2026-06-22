@@ -6,7 +6,7 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 export const ordersRouter = Router();
 ordersRouter.use(authenticate);
 
-ordersRouter.get("/", async (req: AuthenticatedRequest, res) => {
+ordersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
   const where = req.auth!.customerId ? { customerId: req.auth!.customerId } : {};
   const orders = await prisma.order.findMany({
     where,

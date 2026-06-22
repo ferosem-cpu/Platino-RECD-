@@ -31,3 +31,8 @@ lookupsRouter.get("/roles", async (_req, res) => {
   const roles = await prisma.role.findMany({ select: { id: true, key: true, name: true, description: true } });
   res.json(roles);
 });
+
+lookupsRouter.get("/products", async (_req, res) => {
+  const products = await prisma.product.findMany({ orderBy: { model: "asc" } });
+  res.json(products);
+});

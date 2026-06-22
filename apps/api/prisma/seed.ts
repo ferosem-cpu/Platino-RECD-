@@ -22,6 +22,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.MANAGE_USERS, name: "Add users and assign roles" },
     { key: PERMISSION_KEY.RESOLVE_PENDING_ACTION, name: "Resolve a pending action" },
     { key: PERMISSION_KEY.MANAGE_SETTINGS, name: "Manage company settings and theming" },
+    { key: PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS, name: "Act on complaints assigned to you" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -59,13 +60,13 @@ async function seedRoles() {
     },
     [ROLE_KEY.ERECTION_ENGINEER]: {
       name: "Erection Engineer",
-      description: "Updates site progress on the ground. Oversees all erection-stage field work (fitters/welders are informal titles under this role, not separate roles).",
-      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS],
+      description: "Updates site progress on the ground. Oversees all erection-stage field work (fitters/welders are informal titles under this role, not separate roles). Resolves complaints assigned to them.",
+      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS],
     },
     [ROLE_KEY.COMMISSIONING_ENGINEER]: {
       name: "Commissioning Engineer",
-      description: "Updates commissioning stages, uploads test reports.",
-      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS],
+      description: "Updates commissioning stages, uploads test reports. Resolves complaints assigned to them.",
+      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS],
     },
     [ROLE_KEY.SERVICE_TEAM]: {
       name: "Service Team",

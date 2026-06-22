@@ -10,15 +10,19 @@ import { dashboardRouter } from "./routes/dashboard";
 import { usersRouter } from "./routes/users";
 import { lookupsRouter } from "./routes/lookups";
 import { settingsRouter } from "./routes/settings";
+import { customersRouter } from "./routes/customers";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Raise the body limit so base64 data-URL payloads (site photos, company logo) fit;
+// the default 100kb rejects anything but a thumbnail.
+app.use(express.json({ limit: "10mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/auth", authRouter);
 app.use("/orders", ordersRouter);
+app.use("/customers", customersRouter);
 app.use("/sites", sitesRouter);
 app.use("/complaints", complaintsRouter);
 app.use("/pending-actions", pendingActionsRouter);

@@ -94,10 +94,24 @@ authRouter.post("/customer/register", async (req, res) => {
     },
   });
 
-  // Log OTP to terminal for dev verification
+  // Deliver the OTP over the customer's registered email. SMS and WhatsApp are stubbed
+  // channels in Phase 1 (see project notes); enabling them later is a channels change here only.
+  try {
+    await sendNotification({
+      recipientId: contact.id,
+      templateKey: "otp_code",
+      data: { code, orderNumber },
+      channels: ["email"],
+    });
+  } catch (err) {
+    console.error("Failed to send customer OTP email", err);
+  }
   console.log(`[OTP GENERATED] Order ${orderNumber} - Phone ${phone} - OTP: ${code}`);
 
-  res.json({ ok: true, message: "OTP generated", code });
+  // In development we echo the code back so the flow is testable without a live mail provider.
+  // In production the code is delivered only over the notification channel, never in the response.
+  const devCode = process.env.NODE_ENV === "production" ? undefined : code;
+  res.json({ ok: true, message: "OTP sent to your registered email", devCode });
 });
 
 /** Customer OTP verification. */

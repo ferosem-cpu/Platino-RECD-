@@ -26,6 +26,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     },
   });
   if (!res.ok) {
+    // An expired/invalid token anywhere in the app means the session is dead - clear it and
+    // bounce to login (unless we're already there, e.g. a failed sign-in or OTP attempt).
+    if (res.status === 401 && typeof window !== "undefined" && window.location.pathname !== "/login") {
+      clearToken();
+      window.location.href = "/login";
+    }
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`);
   }

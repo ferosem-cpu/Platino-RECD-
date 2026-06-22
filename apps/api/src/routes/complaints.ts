@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COMPLAINT_STATUS } from "@recd/shared";
+import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COMPLAINT_STATUS, ROLE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
@@ -8,15 +8,51 @@ import { asString } from "../lib/params";
 export const complaintsRouter = Router();
 complaintsRouter.use(authenticate);
 
-complaintsRouter.get("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT, PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW), async (req: AuthenticatedRequest, res) => {
-  const where = req.auth!.customerId ? { customerId: req.auth!.customerId } : {};
-  const complaints = await prisma.complaint.findMany({
-    where,
-    include: { site: true, assignedTo: true },
-    orderBy: { createdAt: "desc" },
-  });
-  res.json(complaints);
-});
+/** Best-effort notify: a provider failure must never roll back an already-committed write. */
+async function notifySafely(args: Parameters<typeof sendNotification>[0]) {
+  try {
+    await sendNotification(args);
+  } catch (err) {
+    console.error("Notification failed", err);
+  }
+}
+
+complaintsRouter.get(
+  "/",
+  requirePermission(
+    PERMISSION_KEY.RAISE_COMPLAINT,
+    PERMISSION_KEY.MANAGE_COMPLAINTS,
+    PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW,
+    PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS,
+  ),
+  async (req: AuthenticatedRequest, res) => {
+    const { customerId, userId, permissions } = req.auth!;
+
+    // Scope the list to what the caller is allowed to see:
+    // - customers see only their own tickets;
+    // - managers / service team / overview-viewers see everything;
+    // - field engineers see only tickets assigned to them.
+    let where: Record<string, unknown> = {};
+    if (customerId) {
+      where = { customerId };
+    } else if (
+      !permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) &&
+      !permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW)
+    ) {
+      where = { assignedToId: userId };
+    }
+
+    const complaints = await prisma.complaint.findMany({
+      where,
+      include: {
+        site: { include: { order: { include: { customer: true } } } },
+        assignedTo: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(complaints);
+  },
+);
 
 /** Company-wide count-by-status - Owner/Admin and Management only (see project notes). */
 complaintsRouter.get("/overview", requirePermission(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW), async (_req, res) => {
@@ -24,6 +60,19 @@ complaintsRouter.get("/overview", requirePermission(PERMISSION_KEY.VIEW_COMPLAIN
   const counts: Record<string, number> = Object.fromEntries(Object.values(COMPLAINT_STATUS).map((s) => [s, 0]));
   for (const row of grouped) counts[row.status] = row._count._all;
   res.json({ countsByStatus: counts });
+});
+
+/** Field engineers a manager can assign a complaint to. */
+complaintsRouter.get("/assignees", requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS), async (_req, res) => {
+  const engineers = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      role: { key: { in: [ROLE_KEY.ERECTION_ENGINEER, ROLE_KEY.COMMISSIONING_ENGINEER, ROLE_KEY.SERVICE_TEAM] } },
+    },
+    select: { id: true, name: true, role: { select: { name: true } } },
+    orderBy: { name: "asc" },
+  });
+  res.json(engineers);
 });
 
 complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), async (req: AuthenticatedRequest, res) => {
@@ -44,40 +93,65 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
     },
   });
 
-  const serviceTeamUsers = await prisma.user.findMany({ where: { role: { key: "service_team" } } });
+  const serviceTeamUsers = await prisma.user.findMany({ where: { role: { key: ROLE_KEY.SERVICE_TEAM } } });
   await Promise.all(
-    serviceTeamUsers.map((u) =>
-      sendNotification({ recipientId: u.id, templateKey: "complaint_raised", data: { ticketNumber } }),
-    ),
+    serviceTeamUsers.map((u) => notifySafely({ recipientId: u.id, templateKey: "complaint_raised", data: { ticketNumber } })),
   );
 
   res.status(201).json(complaint);
 });
 
-complaintsRouter.patch("/:id", requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS), async (req: AuthenticatedRequest, res) => {
-  const parsed = updateComplaintStatusSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+complaintsRouter.patch(
+  "/:id",
+  requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS),
+  async (req: AuthenticatedRequest, res) => {
+    const parsed = updateComplaintStatusSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const complaint = await prisma.complaint.update({
-    where: { id: asString(req.params.id) },
-    data: {
+    const id = asString(req.params.id);
+    const existing = await prisma.complaint.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Complaint not found" });
+
+    const canManage = req.auth!.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS);
+    // Field engineers may only touch tickets assigned to them, and may never reassign.
+    if (!canManage && existing.assignedToId !== req.auth!.userId) {
+      return res.status(403).json({ error: "This complaint is not assigned to you" });
+    }
+
+    const data: Record<string, unknown> = {
       status: parsed.data.status,
       rootCause: parsed.data.rootCause,
       resolutionNotes: parsed.data.resolutionNotes,
-      assignedToId: req.auth!.userId,
       closedAt: parsed.data.status === COMPLAINT_STATUS.CLOSED ? new Date() : undefined,
-    },
-    include: { customer: { include: { contacts: true } } },
-  });
+    };
+    if (canManage && parsed.data.assignedToId !== undefined) {
+      data.assignedToId = parsed.data.assignedToId; // string to assign, null to unassign
+    }
 
-  const customerContact = complaint.customer.contacts[0];
-  if (customerContact) {
-    await sendNotification({
-      recipientId: customerContact.id,
-      templateKey: "complaint_status_updated",
-      data: { ticketNumber: complaint.ticketNumber, status: complaint.status },
+    const complaint = await prisma.complaint.update({
+      where: { id },
+      data,
+      include: { customer: { include: { contacts: true } } },
     });
-  }
 
-  res.json(complaint);
-});
+    // Notify the customer of the status change.
+    const customerContact = complaint.customer.contacts[0];
+    if (customerContact) {
+      await notifySafely({
+        recipientId: customerContact.id,
+        templateKey: "complaint_status_updated",
+        data: { ticketNumber: complaint.ticketNumber, status: complaint.status },
+      });
+    }
+    // Notify a newly-assigned engineer that a ticket has landed on their plate.
+    if (canManage && typeof data.assignedToId === "string" && data.assignedToId !== existing.assignedToId) {
+      await notifySafely({
+        recipientId: data.assignedToId,
+        templateKey: "complaint_assigned",
+        data: { ticketNumber: complaint.ticketNumber },
+      });
+    }
+
+    res.json(complaint);
+  },
+);

@@ -93,6 +93,15 @@ const settingsLink = {
   ),
 };
 
+// Which permissions unlock each main link. Holding ANY one shows the link.
+const LINK_PERMISSIONS: Record<string, string[]> = {
+  "/dashboard": ["view_dashboard"],
+  "/orders": ["manage_orders"],
+  "/sites": ["view_site_status"],
+  "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
+  "/users": ["manage_users"],
+};
+
 export default function Nav() {
   const pathname = usePathname();
   const { user, logout, hasPermission } = useAuth();
@@ -136,10 +145,7 @@ export default function Nav() {
           Main
         </p>
         {liveLinks
-          .filter((link) => {
-            if (link.href === "/users") return hasPermission("manage_users");
-            return true;
-          })
+          .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
           .map((link) => (
             <Link
               key={link.href}

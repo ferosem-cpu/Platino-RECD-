@@ -80,6 +80,7 @@ export default function CustomerPortalPage() {
   const [submittingComplaint, setSubmittingComplaint] = useState(false);
   const [complaintSuccess, setComplaintSuccess] = useState<string | null>(null);
   const [complaintError, setComplaintError] = useState<string | null>(null);
+  const [resolvingAction, setResolvingAction] = useState<string | null>(null);
 
   async function loadData() {
     try {
@@ -109,6 +110,21 @@ export default function CustomerPortalPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  async function resolvePending(actionId: string, resolution: string) {
+    setResolvingAction(actionId);
+    try {
+      await api(`/pending-actions/${actionId}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ resolution }),
+      });
+      await loadData();
+    } catch (err) {
+      console.error("Failed to resolve pending action", err);
+    } finally {
+      setResolvingAction(null);
+    }
+  }
 
   async function handleComplaintSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -223,6 +239,41 @@ export default function CustomerPortalPage() {
             <div className="card p-8 text-center text-gray-500">
               No orders found for this account.
             </div>
+          )}
+
+          {/* Action needed from the customer (e.g. exhaust hookup decision) */}
+          {site && site.pendingActions.filter((p) => p.status === "open").length > 0 && (
+            <section className="card p-6 border-l-4 border-amber-400 bg-amber-50/40">
+              <h3 className="text-lg font-bold mb-1 text-amber-900">Action needed from you</h3>
+              <p className="text-xs text-amber-800/80 mb-4">Please review and respond so our team can proceed on site.</p>
+              <div className="space-y-4">
+                {site.pendingActions
+                  .filter((p) => p.status === "open")
+                  .map((p) => (
+                    <div key={p.id} className="rounded-xl border border-amber-200 bg-white p-4">
+                      <p className="text-sm text-gray-700">{p.description}</p>
+                      {p.category === "customer_approval" && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            disabled={resolvingAction === p.id}
+                            onClick={() => resolvePending(p.id, "keep_existing")}
+                            className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            Keep my existing exhaust filter
+                          </button>
+                          <button
+                            disabled={resolvingAction === p.id}
+                            onClick={() => resolvePending(p.id, "replace_with_recd")}
+                            className="btn-primary px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                          >
+                            Remove it &amp; install the RECD
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </section>
           )}
 
           {/* SITC Installation Stage Timeline */}

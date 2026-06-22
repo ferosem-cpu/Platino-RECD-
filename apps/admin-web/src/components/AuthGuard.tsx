@@ -5,17 +5,62 @@ import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
 import Nav from "./Nav";
 
-const ROUTE_PERMISSIONS: Record<string, string> = {
-  "/dashboard": "view_dashboard",
-  "/orders": "manage_orders",
-  "/sites": "view_site_status",
-  "/complaints": "view_site_status",
-  "/users": "manage_users",
-  "/settings": "manage_settings",
+// Each protected route lists the permissions that grant access. Holding ANY of them is enough.
+const ROUTE_PERMISSIONS: Record<string, string[]> = {
+  "/dashboard": ["view_dashboard"],
+  "/orders": ["manage_orders"],
+  "/sites": ["view_site_status"],
+  "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
+  "/users": ["manage_users"],
+  "/settings": ["manage_settings"],
 };
 
+// Where to send a staff user who lands on /login etc. - the first module they can actually open.
+const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/users", "/settings"];
+
+function canAccess(permissions: string[], route: string): boolean {
+  const required = ROUTE_PERMISSIONS[route];
+  if (!required) return true; // unguarded route
+  return required.some((p) => permissions.includes(p));
+}
+
+function firstLanding(permissions: string[]): string | null {
+  return LANDING_PRIORITY.find((route) => canAccess(permissions, route)) ?? null;
+}
+
+function matchRoute(pathname: string): string | undefined {
+  return Object.keys(ROUTE_PERMISSIONS).find(
+    (route) => pathname === route || pathname.startsWith(route + "/"),
+  );
+}
+
+function NoAccessScreen({ name, onLogout }: { name: string; onLogout: () => void }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
+      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-xl">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+        </div>
+        <h1 className="text-lg font-semibold text-gray-900">No modules enabled yet</h1>
+        <p className="mt-2 text-sm text-gray-500">
+          Hi {name}, your account doesn&apos;t have access to any modules yet. Please contact your
+          administrator to have the right permissions assigned.
+        </p>
+        <button
+          onClick={onLogout}
+          className="mt-6 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -23,50 +68,32 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     if (loading) return;
 
     if (!user) {
-      if (pathname !== "/login") {
-        router.push("/login");
-      }
-    } else {
-      if (user.mustChangePassword) {
-        if (pathname !== "/change-password") {
-          router.push("/change-password");
-        }
-      } else {
-        if (user.role.key === "customer") {
-          if (pathname !== "/customer/portal") {
-            router.push("/customer/portal");
-          }
-        } else {
-          if (pathname === "/login" || pathname === "/change-password" || pathname === "/customer/portal") {
-            // Find fallback page they have permission to access
-            if (user.permissions.includes("view_dashboard")) {
-              router.push("/dashboard");
-            } else if (user.permissions.includes("view_site_status")) {
-              router.push("/sites");
-            } else {
-              router.push("/dashboard");
-            }
-          } else {
-            // Check direct URL access permission
-            const matchedRoute = Object.keys(ROUTE_PERMISSIONS).find(
-              (route) => pathname === route || pathname.startsWith(route + "/")
-            );
-            if (matchedRoute) {
-              const reqPerm = ROUTE_PERMISSIONS[matchedRoute];
-              if (!user.permissions.includes(reqPerm)) {
-                // Redirect to a route they DO have access to
-                if (user.permissions.includes("view_site_status")) {
-                  router.push("/sites");
-                } else if (user.permissions.includes("view_dashboard")) {
-                  router.push("/dashboard");
-                } else {
-                  router.push("/login");
-                }
-              }
-            }
-          }
-        }
-      }
+      if (pathname !== "/login") router.push("/login");
+      return;
+    }
+
+    if (user.mustChangePassword) {
+      if (pathname !== "/change-password") router.push("/change-password");
+      return;
+    }
+
+    if (user.role.key === "customer") {
+      if (pathname !== "/customer/portal") router.push("/customer/portal");
+      return;
+    }
+
+    // Staff: bounce off the auth pages onto their first accessible module.
+    if (pathname === "/login" || pathname === "/change-password" || pathname === "/customer/portal") {
+      const landing = firstLanding(user.permissions);
+      if (landing) router.push(landing);
+      return;
+    }
+
+    // Staff hitting a route they lack permission for -> send them to a route they can open.
+    const matched = matchRoute(pathname);
+    if (matched && !canAccess(user.permissions, matched)) {
+      const landing = firstLanding(user.permissions);
+      if (landing) router.push(landing);
     }
   }, [user, loading, pathname, router]);
 
@@ -86,39 +113,30 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const isCustomerPortal = pathname === "/customer/portal";
 
   if (!user) {
-    if (isLoginPage) {
-      return <>{children}</>;
-    }
-    return null;
+    return isLoginPage ? <>{children}</> : null;
   }
 
   if (user.mustChangePassword) {
-    if (isChangePasswordPage) {
-      return <>{children}</>;
-    }
-    return null;
+    return isChangePasswordPage ? <>{children}</> : null;
   }
 
   if (user.role.key === "customer") {
-    if (isCustomerPortal) {
-      return <div className="min-h-screen bg-gray-50">{children}</div>;
-    }
-    return null;
+    return isCustomerPortal ? <div className="min-h-screen bg-gray-50">{children}</div> : null;
   }
 
   if (isLoginPage || isChangePasswordPage || isCustomerPortal) {
     return null;
   }
 
-  // Double check permission before rendering the page content
-  const matchedRoute = Object.keys(ROUTE_PERMISSIONS).find(
-    (route) => pathname === route || pathname.startsWith(route + "/")
-  );
-  if (matchedRoute) {
-    const reqPerm = ROUTE_PERMISSIONS[matchedRoute];
-    if (!user.permissions.includes(reqPerm)) {
-      return null;
-    }
+  // Staff with no accessible module at all (e.g. a brand-new role with no permissions).
+  if (!firstLanding(user.permissions)) {
+    return <NoAccessScreen name={user.name} onLogout={logout} />;
+  }
+
+  // Block rendering a page the user can't access (the effect above redirects them).
+  const matched = matchRoute(pathname);
+  if (matched && !canAccess(user.permissions, matched)) {
+    return null;
   }
 
   return (
