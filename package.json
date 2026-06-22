@@ -10,6 +10,7 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
+    "postinstall": "npm run build --workspace=packages/shared",
     "db:migrate": "npm run db:migrate --workspace=apps/api",
     "db:seed": "npm run db:seed --workspace=apps/api"
   },
