@@ -133,3 +133,35 @@ The admin-web was a desktop-only layout — a fixed 240 px sidebar plus wide tab
 
 **Local preview tip**
 For visually testing the responsive UI without standing up Postgres locally, set `NEXT_PUBLIC_DEMO_MODE=1` in `apps/admin-web/.env.local` and add a small `src/lib/_demoMock.ts` that short-circuits `api()` in `apiClient.ts` with sample data. This file is intentionally **not** in the repo — it's a dev-only convenience and should never be committed.
+
+## 15. Premium industrial design system (2026-06-30)
+Visual-only redesign requested as "modern, clean, premium industrial — inspired by Siemens/Schneider/ABB/Honeywell/Caterpillar." Implemented entirely through the **existing white-label theme engine** rather than per-page color overrides, so it stays compatible with §1's "data, not code" principle and the Settings page's customer-facing theme picker. Commits: `92af248`, `ab68625`, `180dba3` on `master`.
+
+**Palette (now the default theme)**
+Primary/CTA orange `#F58220`, sidebar/heading blue `#0F4C81`, success/accent emerald `#22C55E`, page background `#F5F7FA`, white cards with soft shadows. Semantic status colors: success green, warning amber, error red.
+
+**How it's wired (`apps/admin-web/src/lib/themes.ts`)**
+The `slate` preset (key unchanged, `name` renamed to "Platino Industrial") now holds this palette and is the fallback when no theme is saved — so Super Admins who later pick a different preset or upload a custom palette via Settings are unaffected; this only changes what *out-of-the-box* looks like. `ThemeInitializer.tsx` applies it to `:root` CSS variables on first paint, same mechanism as before.
+
+**New shared primitives (`globals.css`)**
+- `.kpi-tile` / `.kpi-tile-icon` / `.kpi-tile-value` / `.kpi-tile-label` — rounded white stat cards with an icon chip, used on Dashboard and Complaints overview.
+- `.status-pill` + `.status-pill-{success,warning,error}` — the one badge system every page now uses for ticket/site status (replaces several one-off `bg-red-50 text-red-700 border...` literals).
+- `.progress-track` / `.progress-fill-{success,warning,error}` — thin rounded progress bars (available for use; not yet wired to a real percentage field anywhere, since none of the current data models expose one).
+- `.field` — light-grey filled form input/select/textarea (replaces plain `border-gray-300` boxes), orange focus ring.
+- `.bottom-nav` / `.bottom-nav-item` — floating rounded mobile tab bar (`apps/admin-web/src/components/BottomNav.tsx`), shown below `lg` only. Tabs: Dashboard, Sites, Complaints (each gated by the same permission as the sidebar link, hidden if the user lacks it), plus a Profile button that opens the existing `Nav` drawer via `AuthGuard`'s `mobileNavOpen` state — no new route was added for "Profile".
+
+**Dashboard charts**
+Added `chart.js` + `react-chartjs-2` (`apps/admin-web/package.json`). The dashboard now renders a bar chart (sites by SITC phase) and a donut chart (complaints by status), both fed by the existing `GET /dashboard` endpoint — **no API or schema changes**. Complaint slice colors are derived from status (`resolved`/`closed` → green, `escalated` → red, everything else → amber) directly in `dashboard/page.tsx`, not from the backend.
+
+**Per-page status**
+- Fully restyled with the new primitives: Dashboard, Sites, Complaints, Orders (form), customer portal (ticket form + status badges).
+- Headings recolored to `var(--text-heading)`: Orders, Complaints, Vendors, Users, Settings, Site detail.
+- Untouched but already correct: Login, sidebar/nav, all `.btn-primary`/`.card`/modal usages — these picked up the new palette automatically because they were already theme-variable-driven before this pass.
+
+**Things intentionally not done**
+- No charts added beyond Dashboard (no real per-site progress percentage exists yet to chart on Sites/Orders).
+- Vendor approve/reject buttons keep hardcoded `bg-green-600` (semantic, not a theme color — left as-is).
+- No business logic, auth, API contracts, or database changes anywhere in this pass.
+
+**Verification**
+`tsc --noEmit` and `npm run build` (admin-web) both clean after every commit in this series; no automated UI testing (Playwright/etc.) exists in this repo, so the visual result has only been checked by the user on the deployed Vercel preview.
