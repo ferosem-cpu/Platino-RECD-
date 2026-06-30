@@ -167,35 +167,36 @@ export default function CustomerPortalPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-12">
+    <div className="min-h-screen bg-gray-50 pb-12" data-testid="customer-portal-page">
       {/* ── Top Premium Navbar ─────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 bg-white border-b border-gray-200 px-6 py-4 shadow-sm flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-lg bg-[var(--theme-primary)] flex items-center justify-center text-white font-bold text-lg">P</div>
-          <div>
-            <h1 className="text-md font-bold text-gray-900 leading-tight">Order Tracking</h1>
-            <p className="text-xs text-gray-500">Customer Support Portal</p>
+      <header className="sticky top-0 z-40 bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4 shadow-sm flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="h-8 w-8 rounded-lg bg-[var(--theme-primary)] flex items-center justify-center text-white font-bold text-lg shrink-0">P</div>
+          <div className="min-w-0">
+            <h1 className="text-sm sm:text-md font-bold text-gray-900 leading-tight truncate">Order Tracking</h1>
+            <p className="text-[10px] sm:text-xs text-gray-500 truncate">Customer Support Portal</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0">
           <div className="text-right hidden sm:block">
             <p className="text-xs font-semibold text-gray-900">{user?.name}</p>
             <p className="text-[10px] text-gray-500">{site?.order?.customer?.name}</p>
           </div>
           <button
             onClick={logout}
-            className="rounded-lg border border-gray-200 hover:border-red-200 px-3.5 py-1.5 text-xs font-semibold text-gray-600 hover:text-red-600 hover:bg-red-50 transition-all flex items-center gap-1.5"
+            data-testid="portal-signout-button"
+            className="rounded-lg border border-gray-200 hover:border-red-200 px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold text-gray-600 hover:text-red-600 hover:bg-red-50 transition-all flex items-center gap-1.5"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
             </svg>
-            Sign Out
+            <span className="hidden xs:inline sm:inline">Sign Out</span>
           </button>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 sm:mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8">
         
         {/* Left 2 Columns: Tracking and Timeline */}
         <div className="lg:col-span-2 space-y-8">

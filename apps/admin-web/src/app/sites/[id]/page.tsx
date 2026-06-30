@@ -161,9 +161,9 @@ export default function SiteDetailPage() {
   if (!site) return <p className="text-sm text-gray-500">Loading...</p>;
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6 max-w-4xl" data-testid="site-detail-page">
       <div>
-        <h1 className="text-xl font-semibold">{site.order.orderNumber}</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold">{site.order.orderNumber}</h1>
         <p className="text-sm text-gray-500">
           {site.order.customer.name} · {site.address ?? "No address on file"}
         </p>
@@ -325,7 +325,7 @@ export default function SiteDetailPage() {
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-gray-600">Photos</h2>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {site.photos.map((p) => (
             <a key={p.id} href={p.photoUrl} target="_blank" rel="noreferrer" className="block">
               <img src={p.photoUrl} alt={p.checkpoint.label} className="h-24 w-full rounded object-cover" />

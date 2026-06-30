@@ -127,22 +127,22 @@ export default function SettingsPage() {
   const isCustom = activeTheme === "custom" && customColors;
 
   return (
-    <div className="space-y-8 max-w-4xl">
+    <div className="space-y-6 sm:space-y-8 max-w-4xl" data-testid="settings-page">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-gray-500">
           Customise your dashboard branding and appearance.
         </p>
       </div>
 
       {/* ── Company Branding ────────────────────────────────────────────── */}
-      <section className="card p-6">
-        <h2 className="text-lg font-semibold mb-1">Company Branding</h2>
+      <section className="card p-4 sm:p-6">
+        <h2 className="text-base sm:text-lg font-semibold mb-1">Company Branding</h2>
         <p className="text-sm text-gray-500 mb-5">
           Upload your company logo. It will appear in the sidebar. Accepts JPG or PNG.
         </p>
 
-        <div className="flex items-start gap-6">
+        <div className="flex flex-col sm:flex-row sm:items-start gap-4 sm:gap-6">
           {/* Preview */}
           {logoUrl ? (
             <div className="relative group">
@@ -199,13 +199,13 @@ export default function SettingsPage() {
       </section>
 
       {/* ── Theme Presets ───────────────────────────────────────────────── */}
-      <section className="card p-6">
-        <h2 className="text-lg font-semibold mb-1">Theme</h2>
+      <section className="card p-4 sm:p-6">
+        <h2 className="text-base sm:text-lg font-semibold mb-1">Theme</h2>
         <p className="text-sm text-gray-500 mb-5">
           Choose an industry colour scheme or extract a custom palette from an image.
         </p>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
           {THEMES.map((t) => {
             const selected = !isCustom && activeTheme === t.key;
             return (
@@ -321,11 +321,11 @@ export default function SettingsPage() {
       </section>
 
       {/* ── Live Preview ────────────────────────────────────────────────── */}
-      <section className="card p-6">
-        <h2 className="text-lg font-semibold mb-4">Live Preview</h2>
-        <div className="flex gap-4">
+      <section className="card p-4 sm:p-6">
+        <h2 className="text-base sm:text-lg font-semibold mb-4">Live Preview</h2>
+        <div className="flex flex-col sm:flex-row gap-4">
           <div
-            className="w-48 rounded-xl p-4 space-y-2"
+            className="w-full sm:w-48 rounded-xl p-4 space-y-2"
             style={{ backgroundColor: "var(--theme-sidebar-bg)", color: "var(--theme-sidebar-text)" }}
           >
             {logoUrl && (

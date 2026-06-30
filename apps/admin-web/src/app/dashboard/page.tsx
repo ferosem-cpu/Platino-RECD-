@@ -25,12 +25,12 @@ export default function DashboardPage() {
   if (!data) return <p className="text-sm text-gray-500">Loading...</p>;
 
   return (
-    <div className="space-y-8">
-      <h1 className="text-xl font-semibold">Dashboard</h1>
+    <div className="space-y-8" data-testid="dashboard-page">
+      <h1 className="text-xl sm:text-2xl font-semibold">Dashboard</h1>
 
       <section>
         <h2 className="mb-3 text-sm font-medium text-gray-600">Sites by SITC phase</h2>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
           {Object.entries(data.sitesByPhase).map(([phase, count]) => (
             <div key={phase} className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-2xl font-semibold">{count}</div>
@@ -42,7 +42,7 @@ export default function DashboardPage() {
 
       <section>
         <h2 className="mb-3 text-sm font-medium text-gray-600">Complaints by status</h2>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
           {Object.entries(data.complaintsByStatus).map(([status, count]) => (
             <div key={status} className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="text-2xl font-semibold">{count}</div>
