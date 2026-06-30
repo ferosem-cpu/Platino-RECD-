@@ -71,4 +71,43 @@ Two separate Vercel projects: **admin-web** (root directory `apps/admin-web`, Ne
 - Schema/seed: `apps/api/prisma/{schema.prisma,seed.ts}`
 - API routes: `apps/api/src/routes/*` (auth, sites, complaints, orders, customers, pendingActions, dashboard, users, settings, lookups); auth in `src/middleware/auth.ts`
 - Web: `apps/admin-web/src/components/{AuthContext,AuthGuard,Nav}.tsx`; pages under `src/app/*`
+- Responsive helpers (shared CSS): `apps/admin-web/src/app/globals.css` — `.data-card`, `.data-card-row`, `.table-desktop`, `.cards-mobile`, `.table-scroll`, `.modal-panel` (mobile sizing)
 - Memory (persists across sessions): `…/memory/project_recd_tracker_app.md`
+
+## 11. Mobile-responsive UI (this pass)
+The admin-web was a desktop-only layout — a fixed 240 px sidebar plus wide tables that overflowed horizontally on phones, modals that exceeded the viewport, and several grids (`grid-cols-3/4/2` without breakpoint prefixes) that crushed content below ~640 px. This pass made every admin-web screen mobile-responsive from 320 px → 1024+ without touching API contracts, business logic, auth, permissions, theming, env vars, `vercel.json` or `next.config.js`. Three commits on `master`: `16a2dd9`, `ce24f23`, `4a33312`.
+
+**Shell (`apps/admin-web/src/components/`)**
+- `Nav.tsx` is now an off-canvas drawer below `lg` (1024 px), with a backdrop, route-change auto-close, and a built-in close button. From `lg` upwards it renders exactly as before (`lg:relative lg:translate-x-0`).
+- `AuthGuard.tsx` injects a sticky **mobile top bar** with a hamburger (`data-testid="mobile-menu-button"`) shown only below `lg`. Main content padding scales `p-4 sm:p-6 lg:p-8` so phones get the full viewport width.
+
+**Responsive primitives (`globals.css`)** — used by every list screen:
+- `.table-desktop` hides itself below `md` and is wrapped in `.table-scroll` (horizontal touch-scrolling) when shown.
+- `.cards-mobile` shows below `md` and contains a stack of `.data-card` items.
+- `.data-card` / `.data-card-row` give a consistent label/value card layout (label is uppercase, muted, fixed; value is right-aligned, word-break enabled).
+- `.modal-panel` now `max-height: calc(100dvh - 2rem)`, `overflow-y: auto`, and uses smaller padding on mobile so tall forms (New Order, Manage Complaint, Edit User) scroll inside the panel instead of off the viewport.
+- `.upload-zone` padding shrinks on mobile so the Logo upload doesn't dominate the screen.
+
+**Per-screen changes (no business logic touched)**
+- **Dashboard:** `grid-cols-4` → `grid-cols-2 sm:grid-cols-4`; complaints `grid-cols-2 sm:grid-cols-3 lg:grid-cols-5`. Title scales `text-xl sm:text-2xl`. `data-testid="dashboard-page"`.
+- **Orders:** Header stacks on mobile (`flex-col sm:flex-row`). Same data rendered as `.cards-mobile` below `md` and the original table inside `.table-desktop` from `md` up. New-order modal grids fixed: `grid-cols-3` → `grid-cols-1 sm:grid-cols-3`, contact pair `grid-cols-2` → `grid-cols-1 sm:grid-cols-2`. testIDs: `orders-page`, `orders-new-button`, `orders-mobile-cards`, `order-card-<orderNumber>`.
+- **Sites:** Same desktop-table / mobile-card pair. Mobile card is a `<Link>` so tapping the card navigates to detail. "Stuck Nd" badge is preserved in both layouts.
+- **Site detail:** Photos `grid-cols-4` → `grid-cols-2 sm:grid-cols-3 lg:grid-cols-4`. Title scales.
+- **Complaints:** Overview tiles `grid-cols-3 sm:grid-cols-5` → `grid-cols-2 sm:grid-cols-3 lg:grid-cols-5`. Table → cards on mobile; the "Manage / Update" action becomes a full-width button inside each card. testIDs: `complaints-page`, `complaints-mobile-cards`, `complaint-card-<ticket>`, `complaint-action-<ticket>`.
+- **Users:** Add-user form is now a real responsive grid (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-5`) instead of `flex flex-wrap`; submit goes full-width on mobile. Table → cards; the icon-only Edit / Reset / Deactivate / Activate actions become labelled buttons inside each card.
+- **Settings:** Branding row stacks on mobile; theme grid `grid-cols-2 sm:grid-cols-2 md:grid-cols-3`; Live Preview goes from side-by-side to stacked below `sm`; section padding `p-4 sm:p-6`.
+- **Customer portal:** Top navbar paddings shrunk, title truncates, "Sign Out" label hides on the smallest viewport while the icon stays. Main grid uses smaller gap below `lg`. `data-testid="customer-portal-page"`, `portal-signout-button`.
+
+**Things that were intentionally NOT changed**
+- Desktop UI at `lg+` is byte-for-byte identical to before — all changes are additive via `sm:` / `md:` / `lg:` Tailwind prefixes.
+- `apps/api/**`, `apps/mobile/**`, `packages/shared/**`.
+- Tailwind config, PostCSS config, Next config, Vercel config, env vars.
+- All routes, permissions, API surfaces, testIDs that already existed.
+
+**Verification**
+- `npm run build --workspace=apps/admin-web` → 13 routes, 0 type errors, 0 warnings.
+- ESLint clean across all changed files.
+- Manual visual sweep at 375 × 812 (phone), 768 × 1024 (tablet) and 1280 × 800 (desktop) for: login, dashboard, orders (+ new modal), sites, site detail, complaints (+ manage modal), users (+ edit/reset/deactivate flows), settings (theme + live preview), customer portal. Hamburger drawer open/close confirmed.
+
+**Local preview tip**
+For visually testing the responsive UI without standing up Postgres locally, set `NEXT_PUBLIC_DEMO_MODE=1` in `apps/admin-web/.env.local` and add a small `src/lib/_demoMock.ts` that short-circuits `api()` in `apiClient.ts` with sample data. This file is intentionally **not** in the repo — it's a dev-only convenience and should never be committed.
