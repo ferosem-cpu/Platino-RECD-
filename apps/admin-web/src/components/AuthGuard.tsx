@@ -4,6 +4,7 @@ import { useAuth } from "./AuthContext";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import Nav from "./Nav";
+import BottomNav from "./BottomNav";
 
 // Each protected route lists the permissions that grant access. Holding ANY of them is enough.
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
@@ -176,8 +177,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
           </div>
           <div className="w-9" aria-hidden />
         </header>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-auto">{children}</main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 overflow-auto">{children}</main>
       </div>
+      <BottomNav onProfileClick={() => setMobileNavOpen(true)} />
     </div>
   );
 }

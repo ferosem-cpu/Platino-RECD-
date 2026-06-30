@@ -23,12 +23,16 @@ function isStuck(updatedAt: string) {
 function LastUpdate({ updatedAt }: { updatedAt: string }) {
   if (isStuck(updatedAt)) {
     return (
-      <span className="rounded bg-amber-100 px-2 py-0.5 text-amber-800 text-xs whitespace-nowrap">
+      <span className="status-pill status-pill-error">
         Stuck {daysSince(updatedAt)}d
       </span>
     );
   }
-  return <span className="text-sm text-gray-600">{new Date(updatedAt).toLocaleDateString()}</span>;
+  return (
+    <span className="status-pill status-pill-success">
+      {new Date(updatedAt).toLocaleDateString()}
+    </span>
+  );
 }
 
 export default function SitesPage() {
@@ -43,40 +47,45 @@ export default function SitesPage() {
 
   return (
     <div className="space-y-4" data-testid="sites-page">
-      <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Sites</h1>
+      <div>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>
+          Sites
+        </h1>
+        <p className="mt-1 text-sm text-gray-500">{sites.length} active sites</p>
+      </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       {/* Desktop table */}
       <div className="table-desktop">
-        <div className="table-scroll overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="table-scroll card overflow-hidden">
           <table className="w-full border-collapse text-sm">
-            <thead className="bg-gray-100 text-left text-gray-600">
+            <thead className="bg-gray-50 text-left text-[0.6875rem] font-semibold uppercase tracking-wider text-gray-500">
               <tr>
-                <th className="px-4 py-2">Order #</th>
-                <th className="px-4 py-2">Customer</th>
-                <th className="px-4 py-2">Stage</th>
-                <th className="px-4 py-2">Engineer</th>
-                <th className="px-4 py-2">Last update</th>
+                <th className="px-5 py-3">Order #</th>
+                <th className="px-5 py-3">Customer</th>
+                <th className="px-5 py-3">Stage</th>
+                <th className="px-5 py-3">Engineer</th>
+                <th className="px-5 py-3">Last update</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-gray-100">
               {sites.map((s) => (
-                <tr key={s.id} className="border-t border-gray-100">
-                  <td className="px-4 py-2 font-medium">
-                    <Link href={`/sites/${s.id}`} className="text-blue-600 hover:underline">
+                <tr key={s.id} className="hover:bg-gray-50/60">
+                  <td className="px-5 py-3 font-medium">
+                    <Link href={`/sites/${s.id}`} className="font-mono text-xs font-semibold hover:underline" style={{ color: "var(--theme-primary)" }}>
                       {s.order.orderNumber}
                     </Link>
                   </td>
-                  <td className="px-4 py-2">{s.order.customer.name}</td>
-                  <td className="px-4 py-2">{s.currentStage.label}</td>
-                  <td className="px-4 py-2">{s.assignedEngineer?.name ?? "Unassigned"}</td>
-                  <td className="px-4 py-2">
+                  <td className="px-5 py-3">{s.order.customer.name}</td>
+                  <td className="px-5 py-3">{s.currentStage.label}</td>
+                  <td className="px-5 py-3">{s.assignedEngineer?.name ?? "Unassigned"}</td>
+                  <td className="px-5 py-3">
                     <LastUpdate updatedAt={s.updatedAt} />
                   </td>
                 </tr>
               ))}
               {sites.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-6 text-center text-gray-400">No sites.</td></tr>
+                <tr><td colSpan={5} className="px-5 py-8 text-center text-gray-400">No sites.</td></tr>
               )}
             </tbody>
           </table>
@@ -92,11 +101,11 @@ export default function SitesPage() {
             <Link
               key={s.id}
               href={`/sites/${s.id}`}
-              className="data-card block hover:border-gray-300 transition-colors"
+              className="data-card block"
               data-testid={`site-card-${s.order.orderNumber}`}
             >
               <div className="flex items-start justify-between gap-3 mb-2">
-                <span className="font-mono text-xs font-semibold text-blue-600">{s.order.orderNumber}</span>
+                <span className="font-mono text-xs font-semibold" style={{ color: "var(--theme-primary)" }}>{s.order.orderNumber}</span>
                 <LastUpdate updatedAt={s.updatedAt} />
               </div>
               <p className="text-sm font-semibold text-gray-900 truncate">{s.order.customer.name}</p>
