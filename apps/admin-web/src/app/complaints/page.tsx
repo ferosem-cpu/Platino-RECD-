@@ -98,9 +98,9 @@ export default function ComplaintsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6 max-w-5xl" data-testid="complaints-page">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Complaints</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Complaints</h1>
         <p className="mt-1 text-sm text-gray-500">
           {canManage
             ? "Triage, assign to an engineer, and resolve customer tickets."
@@ -111,7 +111,7 @@ export default function ComplaintsPage() {
       {overview && (
         <section>
           <h2 className="mb-3 text-sm font-medium text-gray-600">Company-wide, by status</h2>
-          <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {Object.entries(overview.countsByStatus).map(([status, count]) => (
               <div key={status} className="rounded-lg border border-gray-200 bg-white p-3">
                 <div className="text-xl font-semibold">{count}</div>
@@ -123,47 +123,78 @@ export default function ComplaintsPage() {
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className="card overflow-hidden">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-              <th className="px-4 py-3">Ticket</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Category</th>
-              <th className="px-4 py-3">Severity</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Assigned to</th>
-              <th className="px-4 py-3 text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {complaints.map((c) => (
-              <tr key={c.id} className="hover:bg-gray-50/60">
-                <td className="px-4 py-3 font-mono text-xs font-semibold">{c.ticketNumber}</td>
-                <td className="px-4 py-3">{c.site?.order.customer.name ?? "—"}</td>
-                <td className="px-4 py-3 capitalize">{pretty(c.category)}</td>
-                <td className="px-4 py-3 capitalize">{c.severity}</td>
-                <td className="px-4 py-3">
-                  <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusBadge(c.status)}`}>
-                    {pretty(c.status)}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-gray-600">{c.assignedTo?.name ?? "Unassigned"}</td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={() => openEditor(c)}
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
-                  >
-                    {canManage ? "Manage" : "Update"}
-                  </button>
-                </td>
+      {/* Desktop table */}
+      <div className="card overflow-hidden table-desktop">
+        <div className="table-scroll">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                <th className="px-4 py-3">Ticket</th>
+                <th className="px-4 py-3">Customer</th>
+                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Severity</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Assigned to</th>
+                <th className="px-4 py-3 text-right">Action</th>
               </tr>
-            ))}
-            {complaints.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No complaints to show.</td></tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {complaints.map((c) => (
+                <tr key={c.id} className="hover:bg-gray-50/60">
+                  <td className="px-4 py-3 font-mono text-xs font-semibold">{c.ticketNumber}</td>
+                  <td className="px-4 py-3">{c.site?.order.customer.name ?? "—"}</td>
+                  <td className="px-4 py-3 capitalize">{pretty(c.category)}</td>
+                  <td className="px-4 py-3 capitalize">{c.severity}</td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusBadge(c.status)}`}>
+                      {pretty(c.status)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{c.assignedTo?.name ?? "Unassigned"}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => openEditor(c)}
+                      className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
+                    >
+                      {canManage ? "Manage" : "Update"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {complaints.length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No complaints to show.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Mobile cards */}
+      <div className="cards-mobile" data-testid="complaints-mobile-cards">
+        {complaints.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-gray-400">No complaints to show.</div>
+        ) : (
+          complaints.map((c) => (
+            <div key={c.id} className="data-card" data-testid={`complaint-card-${c.ticketNumber}`}>
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <span className="font-mono text-xs font-semibold text-gray-900">{c.ticketNumber}</span>
+                <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusBadge(c.status)}`}>
+                  {pretty(c.status)}
+                </span>
+              </div>
+              <p className="text-sm font-semibold text-gray-900 truncate">{c.site?.order.customer.name ?? "—"}</p>
+              <p className="text-xs text-gray-500 capitalize">{pretty(c.category)} · {c.severity}</p>
+              <p className="text-xs text-gray-500 mt-1">Assigned: {c.assignedTo?.name ?? "Unassigned"}</p>
+              <button
+                onClick={() => openEditor(c)}
+                className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
+                data-testid={`complaint-action-${c.ticketNumber}`}
+              >
+                {canManage ? "Manage" : "Update"}
+              </button>
+            </div>
+          ))
+        )}
       </div>
 
       {editing && (

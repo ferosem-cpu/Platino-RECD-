@@ -112,45 +112,76 @@ export default function OrdersPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 max-w-5xl" data-testid="orders-page">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Orders</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Orders</h1>
           <p className="mt-1 text-sm text-gray-500">Sales orders and their installation progress.</p>
         </div>
         {canManage && (
-          <button onClick={() => setOpen(true)} className="btn-primary px-4 py-2 text-sm">+ New order</button>
+          <button
+            data-testid="orders-new-button"
+            onClick={() => setOpen(true)}
+            className="btn-primary px-4 py-2 text-sm self-start sm:self-auto"
+          >
+            + New order
+          </button>
         )}
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className="card overflow-hidden">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-              <th className="px-4 py-3">Order #</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Product</th>
-              <th className="px-4 py-3">Value</th>
-              <th className="px-4 py-3">Current stage</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {orders.map((o) => (
-              <tr key={o.id} className="hover:bg-gray-50/60">
-                <td className="px-4 py-3 font-mono text-xs font-semibold">{o.orderNumber}</td>
-                <td className="px-4 py-3">{o.customer.name}</td>
-                <td className="px-4 py-3">{o.product.name} ({o.product.model})</td>
-                <td className="px-4 py-3">₹{Number(o.value).toLocaleString("en-IN")}</td>
-                <td className="px-4 py-3">{o.site?.currentStage.label ?? "-"}</td>
+      {/* Desktop / tablet: table */}
+      <div className="card overflow-hidden table-desktop">
+        <div className="table-scroll">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                <th className="px-4 py-3">Order #</th>
+                <th className="px-4 py-3">Customer</th>
+                <th className="px-4 py-3">Product</th>
+                <th className="px-4 py-3">Value</th>
+                <th className="px-4 py-3">Current stage</th>
               </tr>
-            ))}
-            {orders.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No orders yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {orders.map((o) => (
+                <tr key={o.id} className="hover:bg-gray-50/60">
+                  <td className="px-4 py-3 font-mono text-xs font-semibold">{o.orderNumber}</td>
+                  <td className="px-4 py-3">{o.customer.name}</td>
+                  <td className="px-4 py-3">{o.product.name} ({o.product.model})</td>
+                  <td className="px-4 py-3 whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</td>
+                  <td className="px-4 py-3">{o.site?.currentStage.label ?? "-"}</td>
+                </tr>
+              ))}
+              {orders.length === 0 && (
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No orders yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Mobile: card stack */}
+      <div className="cards-mobile" data-testid="orders-mobile-cards">
+        {orders.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-gray-400">No orders yet.</div>
+        ) : (
+          orders.map((o) => (
+            <div key={o.id} className="data-card" data-testid={`order-card-${o.orderNumber}`}>
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <span className="font-mono text-xs font-semibold text-gray-900">{o.orderNumber}</span>
+                <span className="badge badge-accent">{o.site?.currentStage.label ?? "—"}</span>
+              </div>
+              <p className="text-sm font-semibold text-gray-900 truncate">{o.customer.name}</p>
+              <p className="text-xs text-gray-500 mb-2 truncate">{o.product.name} ({o.product.model})</p>
+              <div className="data-card-row">
+                <span className="label">Value</span>
+                <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       {open && (
@@ -172,7 +203,7 @@ export default function OrdersPage() {
                 {newCustomer ? (
                   <div className="space-y-2 rounded-lg border border-gray-200 p-3">
                     <input required placeholder="Company name" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <input required placeholder="Contact name" className="rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
                       <input required placeholder="Contact phone (login)" className="rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
                     </div>
@@ -199,7 +230,7 @@ export default function OrdersPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Quantity</label>
                   <input type="number" min={1} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />

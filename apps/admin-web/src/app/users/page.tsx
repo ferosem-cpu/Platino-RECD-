@@ -202,23 +202,23 @@ export default function UsersPage() {
   // ── Render ─────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6 max-w-5xl" data-testid="users-page">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Users</h1>
         <p className="mt-1 text-sm text-gray-500">
           Manage team members and their roles. Add new users, edit details, activate/deactivate accounts, or reset passwords.
         </p>
       </div>
 
       {/* ── Add user form ─────────────────────────────────────────────── */}
-      <form onSubmit={handleSubmit} className="card p-5">
+      <form onSubmit={handleSubmit} className="card p-4 sm:p-5" data-testid="add-user-form">
         <h2 className="text-sm font-semibold mb-3">Add new user</h2>
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
           <div>
             <label className="block text-xs text-gray-500 mb-1">Name</label>
             <input
               required
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
@@ -228,7 +228,7 @@ export default function UsersPage() {
             <input
               required
               type="email"
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
             />
@@ -236,7 +236,7 @@ export default function UsersPage() {
           <div>
             <label className="block text-xs text-gray-500 mb-1">Phone</label>
             <input
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
               value={form.phone}
               placeholder="Optional"
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
@@ -245,7 +245,7 @@ export default function UsersPage() {
           <div>
             <label className="block text-xs text-gray-500 mb-1">Title</label>
             <input
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
               value={form.title}
               placeholder="e.g. Fitter"
               onChange={(e) => setForm({ ...form, title: e.target.value })}
@@ -255,7 +255,7 @@ export default function UsersPage() {
             <label className="block text-xs text-gray-500 mb-1">Role</label>
             <select
               required
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
               value={form.roleKey}
               onChange={(e) => setForm({ ...form, roleKey: e.target.value })}
             >
@@ -267,7 +267,8 @@ export default function UsersPage() {
           </div>
           <button
             type="submit"
-            className="btn-primary px-4 py-2 text-sm"
+            className="btn-primary px-4 py-2 text-sm w-full sm:w-auto sm:col-span-2 lg:col-span-1"
+            data-testid="add-user-submit"
           >
             Add user
           </button>
@@ -303,83 +304,151 @@ export default function UsersPage() {
         </div>
       )}
 
-      {/* ── Users table ───────────────────────────────────────────────── */}
-      <div className="card overflow-hidden">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="bg-gray-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              <th className="px-5 py-3">Name</th>
-              <th className="px-5 py-3">Title</th>
-              <th className="px-5 py-3">Email</th>
-              <th className="px-5 py-3">Phone</th>
-              <th className="px-5 py-3">Role</th>
-              <th className="px-5 py-3">Status</th>
-              <th className="px-5 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {users.map((u) => (
-              <tr key={u.id} className={`hover:bg-gray-50/60 transition-colors ${!u.isActive ? "opacity-60 bg-gray-50/30" : ""}`}>
-                <td className="px-5 py-3 font-medium">{u.name}</td>
-                <td className="px-5 py-3 text-gray-500">{u.title ?? "—"}</td>
-                <td className="px-5 py-3">{u.email ?? "—"}</td>
-                <td className="px-5 py-3 text-gray-500">{u.phone ?? "—"}</td>
-                <td className="px-5 py-3">
-                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
+      {/* ── Users table (desktop) ─────────────────────────────────────── */}
+      <div className="card overflow-hidden table-desktop">
+        <div className="table-scroll">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                <th className="px-5 py-3">Name</th>
+                <th className="px-5 py-3">Title</th>
+                <th className="px-5 py-3">Email</th>
+                <th className="px-5 py-3">Phone</th>
+                <th className="px-5 py-3">Role</th>
+                <th className="px-5 py-3">Status</th>
+                <th className="px-5 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {users.map((u) => (
+                <tr key={u.id} className={`hover:bg-gray-50/60 transition-colors ${!u.isActive ? "opacity-60 bg-gray-50/30" : ""}`}>
+                  <td className="px-5 py-3 font-medium">{u.name}</td>
+                  <td className="px-5 py-3 text-gray-500">{u.title ?? "—"}</td>
+                  <td className="px-5 py-3">{u.email ?? "—"}</td>
+                  <td className="px-5 py-3 text-gray-500">{u.phone ?? "—"}</td>
+                  <td className="px-5 py-3">
+                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
+                      {u.role.name}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3">
+                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${u.isActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
+                      {u.isActive ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openEdit(u)}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                        title="Edit user"
+                      >
+                        <PencilIcon />
+                      </button>
+                      <button
+                        onClick={() => { setResetUser(u); setResetResult(null); }}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                        title="Reset password"
+                      >
+                        <KeyIcon />
+                      </button>
+                      {u.isActive ? (
+                        <button
+                          onClick={() => setDeactivateUser(u)}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          title="Deactivate user"
+                        >
+                          <BlockIcon />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleActivate(u)}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-green-600 hover:bg-green-50 transition-colors"
+                          title="Activate user"
+                        >
+                          <CheckIcon />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-8 text-center text-gray-400">
+                    No users found
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Users cards (mobile) ──────────────────────────────────────── */}
+      <div className="cards-mobile" data-testid="users-mobile-cards">
+        {users.length === 0 ? (
+          <div className="card p-6 text-center text-sm text-gray-400">No users found</div>
+        ) : (
+          users.map((u) => (
+            <div key={u.id} className={`data-card ${!u.isActive ? "opacity-70" : ""}`} data-testid={`user-card-${u.id}`}>
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="min-w-0">
+                  <p className="font-semibold text-sm text-gray-900 truncate">{u.name}</p>
+                  <p className="text-xs text-gray-500 truncate">{u.title ?? "—"}</p>
+                </div>
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${u.isActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
+                  {u.isActive ? "Active" : "Inactive"}
+                </span>
+              </div>
+              <div className="data-card-row">
+                <span className="label">Email</span>
+                <span className="value truncate">{u.email ?? "—"}</span>
+              </div>
+              <div className="data-card-row">
+                <span className="label">Phone</span>
+                <span className="value">{u.phone ?? "—"}</span>
+              </div>
+              <div className="data-card-row">
+                <span className="label">Role</span>
+                <span className="value">
+                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700">
                     {u.role.name}
                   </span>
-                </td>
-                <td className="px-5 py-3">
-                  <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${u.isActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
-                    {u.isActive ? "Active" : "Inactive"}
-                  </span>
-                </td>
-                <td className="px-5 py-3">
-                  <div className="flex items-center justify-end gap-1">
-                    <button
-                      onClick={() => openEdit(u)}
-                      className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                      title="Edit user"
-                    >
-                      <PencilIcon />
-                    </button>
-                    <button
-                      onClick={() => { setResetUser(u); setResetResult(null); }}
-                      className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                      title="Reset password"
-                    >
-                      <KeyIcon />
-                    </button>
-                    {u.isActive ? (
-                      <button
-                        onClick={() => setDeactivateUser(u)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                        title="Deactivate user"
-                      >
-                        <BlockIcon />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleActivate(u)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-green-600 hover:bg-green-50 transition-colors"
-                        title="Activate user"
-                      >
-                        <CheckIcon />
-                      </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {users.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-5 py-8 text-center text-gray-400">
-                  No users found
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+                <button
+                  onClick={() => openEdit(u)}
+                  className="flex-1 min-w-[40%] rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-1.5"
+                >
+                  <PencilIcon /> Edit
+                </button>
+                <button
+                  onClick={() => { setResetUser(u); setResetResult(null); }}
+                  className="flex-1 min-w-[40%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 flex items-center justify-center gap-1.5"
+                >
+                  <KeyIcon /> Reset
+                </button>
+                {u.isActive ? (
+                  <button
+                    onClick={() => setDeactivateUser(u)}
+                    className="flex-1 min-w-[40%] rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 flex items-center justify-center gap-1.5"
+                  >
+                    <BlockIcon /> Deactivate
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleActivate(u)}
+                    className="flex-1 min-w-[40%] rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-700 hover:bg-green-100 flex items-center justify-center gap-1.5"
+                  >
+                    <CheckIcon /> Activate
+                  </button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       {/* ── Edit Modal ────────────────────────────────────────────────── */}
