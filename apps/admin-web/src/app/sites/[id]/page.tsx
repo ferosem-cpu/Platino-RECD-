@@ -188,7 +188,7 @@ export default function SiteDetailPage() {
   return (
     <div className="space-y-6 max-w-4xl" data-testid="site-detail-page">
       <div>
-        <h1 className="text-xl sm:text-2xl font-semibold">{site.order.orderNumber}</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{site.order.orderNumber}</h1>
         <p className="text-sm text-gray-500">
           {site.order.customer.name} · {site.address ?? "No address on file"}
         </p>

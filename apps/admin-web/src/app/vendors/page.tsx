@@ -63,7 +63,7 @@ export default function VendorsPage() {
   return (
     <div className="space-y-6 max-w-5xl">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Vendors</h1>
+        <h1 className="text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Vendors</h1>
         <p className="mt-1 text-sm text-gray-500">
           External erection subcontractors. Review a registration, run due diligence, then approve — approval creates the vendor&apos;s first engineer login.
         </p>

@@ -200,6 +200,28 @@ body {
 .progress-fill-warning { background: #F58220; }
 .progress-fill-error   { background: #E24B4A; }
 
+/* ── Form fields ──────────────────────────────────────────────────────── */
+
+.field {
+  background: var(--bg-page);
+  border: 1px solid #DDE2E8;
+  border-radius: 0.5625rem;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-heading);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 3px var(--theme-primary-light);
+}
+
+.field::placeholder {
+  color: #9AA5B1;
+}
+
 /* ── Mobile bottom navigation ─────────────────────────────────────────── */
 
 .bottom-nav {

@@ -36,9 +36,9 @@ function pretty(s: string) {
 }
 
 function statusBadge(status: string) {
-  if (status === "open" || status === "escalated") return "bg-red-50 text-red-700 border-red-100";
-  if (status === "resolved" || status === "closed") return "bg-green-50 text-green-700 border-green-100";
-  return "bg-blue-50 text-blue-700 border-blue-100";
+  if (status === "open" || status === "escalated") return "status-pill status-pill-error";
+  if (status === "resolved" || status === "closed") return "status-pill status-pill-success";
+  return "status-pill status-pill-warning";
 }
 
 export default function ComplaintsPage() {
@@ -100,7 +100,7 @@ export default function ComplaintsPage() {
   return (
     <div className="space-y-6 max-w-5xl" data-testid="complaints-page">
       <div>
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Complaints</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Complaints</h1>
         <p className="mt-1 text-sm text-gray-500">
           {canManage
             ? "Triage, assign to an engineer, and resolve customer tickets."
@@ -110,12 +110,12 @@ export default function ComplaintsPage() {
 
       {overview && (
         <section>
-          <h2 className="mb-3 text-sm font-medium text-gray-600">Company-wide, by status</h2>
+          <h2 className="mb-2.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-gray-500">Company-wide, by status</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {Object.entries(overview.countsByStatus).map(([status, count]) => (
-              <div key={status} className="rounded-lg border border-gray-200 bg-white p-3">
-                <div className="text-xl font-semibold">{count}</div>
-                <div className="text-xs capitalize text-gray-500">{pretty(status)}</div>
+              <div key={status} className="kpi-tile">
+                <div className="kpi-tile-value">{count}</div>
+                <div className="kpi-tile-label capitalize">{pretty(status)}</div>
               </div>
             ))}
           </div>
@@ -146,7 +146,7 @@ export default function ComplaintsPage() {
                   <td className="px-4 py-3 capitalize">{pretty(c.category)}</td>
                   <td className="px-4 py-3 capitalize">{c.severity}</td>
                   <td className="px-4 py-3">
-                    <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusBadge(c.status)}`}>
+                    <span className={statusBadge(c.status)}>
                       {pretty(c.status)}
                     </span>
                   </td>
@@ -178,7 +178,7 @@ export default function ComplaintsPage() {
             <div key={c.id} className="data-card" data-testid={`complaint-card-${c.ticketNumber}`}>
               <div className="flex items-start justify-between gap-3 mb-2">
                 <span className="font-mono text-xs font-semibold text-gray-900">{c.ticketNumber}</span>
-                <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusBadge(c.status)}`}>
+                <span className={statusBadge(c.status)}>
                   {pretty(c.status)}
                 </span>
               </div>
@@ -215,7 +215,7 @@ export default function ComplaintsPage() {
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
                   <select
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    className="field w-full"
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value })}
                   >
@@ -228,7 +228,7 @@ export default function ComplaintsPage() {
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">Assign to</label>
                     <select
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      className="field w-full"
                       value={form.assignedToId}
                       onChange={(e) => setForm({ ...form, assignedToId: e.target.value })}
                     >
@@ -243,7 +243,7 @@ export default function ComplaintsPage() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Root cause</label>
                 <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="field w-full"
                   value={form.rootCause}
                   onChange={(e) => setForm({ ...form, rootCause: e.target.value })}
                 />
@@ -252,7 +252,7 @@ export default function ComplaintsPage() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Resolution notes</label>
                 <textarea
                   rows={3}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="field w-full"
                   value={form.resolutionNotes}
                   onChange={(e) => setForm({ ...form, resolutionNotes: e.target.value })}
                 />

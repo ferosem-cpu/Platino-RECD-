@@ -212,7 +212,7 @@ export default function UsersPage() {
   return (
     <div className="space-y-6 max-w-5xl" data-testid="users-page">
       <div>
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Users</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Users</h1>
         <p className="mt-1 text-sm text-gray-500">
           Manage team members and their roles. Add new users, edit details, activate/deactivate accounts, or reset passwords.
         </p>

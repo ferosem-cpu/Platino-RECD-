@@ -115,7 +115,7 @@ export default function OrdersPage() {
     <div className="space-y-6 max-w-5xl" data-testid="orders-page">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Orders</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Orders</h1>
           <p className="mt-1 text-sm text-gray-500">Sales orders and their installation progress.</p>
         </div>
         {canManage && (
@@ -202,16 +202,16 @@ export default function OrdersPage() {
                 </div>
                 {newCustomer ? (
                   <div className="space-y-2 rounded-lg border border-gray-200 p-3">
-                    <input required placeholder="Company name" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
+                    <input required placeholder="Company name" className="field w-full" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <input required placeholder="Contact name" className="rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
-                      <input required placeholder="Contact phone (login)" className="rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
+                      <input required placeholder="Contact name" className="field" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
+                      <input required placeholder="Contact phone (login)" className="field" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
                     </div>
-                    <input type="email" placeholder="Contact email (optional)" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} />
+                    <input type="email" placeholder="Contact email (optional)" className="field w-full" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} />
                     <p className="text-[11px] text-gray-400">The phone number is what the customer uses to log in with their Order ID.</p>
                   </div>
                 ) : (
-                  <select required className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })}>
+                  <select required className="field w-full" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })}>
                     <option value="">Select a customer</option>
                     {customers.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
@@ -222,7 +222,7 @@ export default function OrdersPage() {
 
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Product</label>
-                <select required className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
+                <select required className="field w-full" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
                   <option value="">Select a product</option>
                   {products.map((p) => (
                     <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
@@ -233,21 +233,21 @@ export default function OrdersPage() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Quantity</label>
-                  <input type="number" min={1} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
+                  <input type="number" min={1} className="field w-full" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Value (₹)</label>
-                  <input type="number" min={0} required className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} />
+                  <input type="number" min={0} required className="field w-full" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Order date</label>
-                  <input type="date" required className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} />
+                  <input type="date" required className="field w-full" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} />
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Planned exhaust hookup</label>
-                <select className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" value={form.plannedExhaustHookupType} onChange={(e) => setForm({ ...form, plannedExhaustHookupType: e.target.value })}>
+                <select className="field w-full" value={form.plannedExhaustHookupType} onChange={(e) => setForm({ ...form, plannedExhaustHookupType: e.target.value })}>
                   {EXHAUST_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
@@ -257,7 +257,7 @@ export default function OrdersPage() {
               {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
 
               <div className="flex justify-end gap-3">
-                <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
                 <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">{saving ? "Creating…" : "Create order"}</button>
               </div>
             </form>
