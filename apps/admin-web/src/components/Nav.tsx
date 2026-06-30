@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getSavedLogo } from "@/lib/settingsStore";
 import { useAuth } from "./AuthContext";
@@ -102,7 +102,12 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/users": ["manage_users"],
 };
 
-export default function Nav() {
+interface NavProps {
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+}
+
+export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
   const pathname = usePathname();
   const { user, logout, hasPermission } = useAuth();
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -118,92 +123,131 @@ export default function Nav() {
     return () => window.removeEventListener("settings-changed", onSettingsChanged);
   }, []);
 
-  return (
-    <nav className="sidebar w-60 shrink-0 flex flex-col overflow-y-auto">
-      {/* ── Logo / Brand ──────────────────────────────────────────────── */}
-      <div className="px-5 pt-5 pb-3">
-        {logoUrl ? (
-          <div className="mb-3 flex items-center gap-3">
-            <img
-              src={logoUrl}
-              alt="Company logo"
-              className="h-9 w-auto max-w-[8rem] object-contain"
-            />
-          </div>
-        ) : null}
-        <div className="text-xs font-bold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
-          RECD Tracker
-        </div>
-      </div>
+  // Close drawer when route changes (mobile)
+  useEffect(() => {
+    onMobileClose?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
-      {/* ── Divider ───────────────────────────────────────────────────── */}
-      <div className="mx-4 mb-2 border-t" style={{ borderColor: "var(--theme-sidebar-border)" }} />
+  return (
+    <>
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          data-testid="nav-mobile-backdrop"
+          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
+          onClick={onMobileClose}
+        />
+      )}
+
+      <nav
+        data-testid="sidebar-nav"
+        className={`sidebar fixed inset-y-0 left-0 z-50 w-60 shrink-0 flex flex-col overflow-y-auto transform transition-transform duration-300 ease-in-out
+          ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
+          lg:relative lg:translate-x-0`}
+      >
+        {/* ── Logo / Brand ──────────────────────────────────────────────── */}
+        <div className="px-5 pt-5 pb-3 flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            {logoUrl ? (
+              <div className="mb-3 flex items-center gap-3">
+                <img
+                  src={logoUrl}
+                  alt="Company logo"
+                  className="h-9 w-auto max-w-[8rem] object-contain"
+                />
+              </div>
+            ) : null}
+            <div className="text-xs font-bold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
+              RECD Tracker
+            </div>
+          </div>
+          {/* Close button on mobile */}
+          <button
+            data-testid="nav-close-button"
+            onClick={onMobileClose}
+            className="lg:hidden p-1.5 -mr-1 rounded-md hover:bg-white/5 transition-colors"
+            style={{ color: "var(--theme-sidebar-text-muted)" }}
+            aria-label="Close navigation"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* ── Divider ───────────────────────────────────────────────────── */}
+        <div className="mx-4 mb-2 border-t" style={{ borderColor: "var(--theme-sidebar-border)" }} />
 
         {/* ── Main links ────────────────────────────────────────────────── */}
-      <div className="flex-1 px-3 space-y-0.5">
-        <p className="px-3 pt-2 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
-          Main
-        </p>
-        {liveLinks
-          .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
-          .map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
+        <div className="flex-1 px-3 space-y-0.5">
+          <p className="px-3 pt-2 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
+            Main
+          </p>
+          {liveLinks
+            .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
+            .map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                data-testid={`nav-link-${link.label.toLowerCase()}`}
+                className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
+              >
+                {link.icon}
+                {link.label}
+              </Link>
+            ))}
+
+          {/* ── Phase 2 ─────────────────────────────────────────────────── */}
+          <p className="px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
+            Coming Soon
+          </p>
+          {phase2Links.map((item) => (
+            <div
+              key={item.label}
+              className="sidebar-link opacity-40 cursor-not-allowed"
             >
-              {link.icon}
-              {link.label}
-            </Link>
+              {item.icon}
+              <span>{item.label}</span>
+              <span className="ml-auto text-[0.55rem] font-semibold rounded-full px-1.5 py-0.5" style={{ backgroundColor: "var(--theme-sidebar-bg-hover)", color: "var(--theme-sidebar-text-muted)" }}>
+                P2
+              </span>
+            </div>
           ))}
+        </div>
 
-        {/* ── Phase 2 ─────────────────────────────────────────────────── */}
-        <p className="px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
-          Coming Soon
-        </p>
-        {phase2Links.map((item) => (
-          <div
-            key={item.label}
-            className="sidebar-link opacity-40 cursor-not-allowed"
+        {/* ── Bottom section ────────────────────────────────────────────── */}
+        <div className="px-3 pb-4 pt-2">
+          <div className="mx-1 mb-2 border-t" style={{ borderColor: "var(--theme-sidebar-border)" }} />
+          {hasPermission("manage_settings") && (
+            <Link
+              href={settingsLink.href}
+              data-testid="nav-link-settings"
+              className={`sidebar-link ${pathname === settingsLink.href ? "active" : ""}`}
+            >
+              {settingsLink.icon}
+              {settingsLink.label}
+            </Link>
+          )}
+          {user && (
+            <div className="px-3 py-2 text-xs font-medium truncate" style={{ color: "var(--theme-sidebar-text)" }}>
+              Logged in as <br />
+              <strong style={{ color: "var(--theme-accent)" }}>{user.name}</strong>
+              <div className="text-[10px] opacity-75">{user.role.name}</div>
+            </div>
+          )}
+          <button
+            onClick={logout}
+            data-testid="nav-logout-button"
+            className="sidebar-link w-full mt-0.5 text-red-400 hover:!text-red-300 hover:!bg-red-950/30"
           >
-            {item.icon}
-            <span>{item.label}</span>
-            <span className="ml-auto text-[0.55rem] font-semibold rounded-full px-1.5 py-0.5" style={{ backgroundColor: "var(--theme-sidebar-bg-hover)", color: "var(--theme-sidebar-text-muted)" }}>
-              P2
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Bottom section ────────────────────────────────────────────── */}
-      <div className="px-3 pb-4 pt-2">
-        <div className="mx-1 mb-2 border-t" style={{ borderColor: "var(--theme-sidebar-border)" }} />
-        {hasPermission("manage_settings") && (
-          <Link
-            href={settingsLink.href}
-            className={`sidebar-link ${pathname === settingsLink.href ? "active" : ""}`}
-          >
-            {settingsLink.icon}
-            {settingsLink.label}
-          </Link>
-        )}
-        {user && (
-          <div className="px-3 py-2 text-xs font-medium truncate" style={{ color: "var(--theme-sidebar-text)" }}>
-            Logged in as <br />
-            <strong style={{ color: "var(--theme-accent)" }}>{user.name}</strong>
-            <div className="text-[10px] opacity-75">{user.role.name}</div>
-          </div>
-        )}
-        <button
-          onClick={logout}
-          className="sidebar-link w-full mt-0.5 text-red-400 hover:!text-red-300 hover:!bg-red-950/30"
-        >
-          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
-          </svg>
-          Log out
-        </button>
-      </div>
-    </nav>
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+            </svg>
+            Log out
+          </button>
+        </div>
+      </nav>
+    </>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useAuth } from "./AuthContext";
 import { useRouter, usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Nav from "./Nav";
 
 // Each protected route lists the permissions that grant access. Holding ANY of them is enough.
@@ -63,6 +63,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Close mobile drawer on route change
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     if (loading) return;
@@ -141,8 +147,30 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <Nav />
-      <main className="flex-1 p-8 overflow-auto">{children}</main>
+      <Nav mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Mobile top bar with hamburger (hidden on lg+) */}
+        <header
+          data-testid="mobile-topbar"
+          className="lg:hidden sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-gray-200 bg-white/95 backdrop-blur-sm px-4 h-14"
+        >
+          <button
+            data-testid="mobile-menu-button"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Open navigation"
+            className="-ml-1 p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+            </svg>
+          </button>
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-sm font-semibold tracking-tight text-gray-900 truncate">RECD Tracker</p>
+          </div>
+          <div className="w-9" aria-hidden />
+        </header>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-auto">{children}</main>
+      </div>
     </div>
   );
 }

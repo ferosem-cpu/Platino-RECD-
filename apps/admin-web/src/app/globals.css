@@ -127,6 +127,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 1rem;
+  overflow-y: auto;
   animation: fadeIn 200ms ease;
 }
 
@@ -136,8 +138,16 @@ body {
   box-shadow: 0 25px 50px -12px rgba(0,0,0,.25);
   width: 100%;
   max-width: 28rem;
-  padding: 1.5rem;
+  padding: 1.25rem;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
   animation: slideUp 250ms ease;
+}
+
+@media (min-width: 640px) {
+  .modal-panel {
+    padding: 1.5rem;
+  }
 }
 
 @keyframes fadeIn {
@@ -173,11 +183,17 @@ body {
 .upload-zone {
   border: 2px dashed #d1d5db;
   border-radius: 0.75rem;
-  padding: 2rem;
+  padding: 1.25rem 1rem;
   text-align: center;
   cursor: pointer;
   transition: all 200ms ease;
   background: #fafafa;
+}
+
+@media (min-width: 640px) {
+  .upload-zone {
+    padding: 2rem;
+  }
 }
 
 .upload-zone:hover,
@@ -213,4 +229,56 @@ body {
 .sidebar::-webkit-scrollbar-thumb {
   background: var(--theme-sidebar-bg-hover);
   border-radius: 2px;
+}
+
+/* ── Responsive table-to-card helpers ─────────────────────────────────── */
+
+/* Hide the desktop table on mobile, show the card stack on mobile only */
+.table-desktop { display: none; }
+.cards-mobile { display: block; }
+@media (min-width: 768px) {
+  .table-desktop { display: block; }
+  .cards-mobile { display: none; }
+}
+
+/* Standard mobile data card used by orders / sites / complaints / users */
+.data-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  padding: 0.875rem 1rem;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+
+.data-card + .data-card { margin-top: 0.625rem; }
+
+.data-card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  font-size: 0.8125rem;
+  padding: 0.125rem 0;
+}
+
+.data-card-row > .label {
+  color: #6b7280;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.data-card-row > .value {
+  color: #111827;
+  text-align: right;
+  word-break: break-word;
+  min-width: 0;
+}
+
+/* Allow tables that stay as tables on mobile to scroll horizontally */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
