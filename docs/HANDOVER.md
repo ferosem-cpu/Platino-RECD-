@@ -165,3 +165,41 @@ Added `chart.js` + `react-chartjs-2` (`apps/admin-web/package.json`). The dashbo
 
 **Verification**
 `tsc --noEmit` and `npm run build` (admin-web) both clean after every commit in this series; no automated UI testing (Playwright/etc.) exists in this repo, so the visual result has only been checked by the user on the deployed Vercel preview.
+
+## 16. QA & security audit (2026-07-02)
+A full black-/grey-box test pass: the whole stack was stood up locally (Postgres 16 + migrate + seed, API on `:4000`, admin-web on `:6001`), every one of the 9 seeded roles was logged in through a **real headless-Chromium browser** (Playwright driving the actual UI, 34 screenshots) **and** exercised directly against the API. **No application code was changed in this pass — this section documents findings only.** Fixes are proposed but not yet applied.
+
+**Role access — verified enforced server-side.** Every API route is guarded by `authenticate` + `requirePermission`, and the live status-code matrix matched the intended permission model exactly (e.g. Sales → 200 on `/orders` `/sites`, 403 everywhere else; Finance with no permissions → 403 on everything; `PUT /settings` → 200 only for Super Admin, 403 even for Management). Tenant isolation holds: a customer sees only their own order/sites/complaints, and a vendor's engineer sees only sites with their `vendorId` (cross-access → 403, re-confirmed by creating a second customer + order). Auth-bypass attempts (no token / garbage token / `alg:none`) are all rejected 401.
+
+**Findings (ranked). None fixed yet.**
+1. **HIGH — JWT secret has a hardcoded fallback.** `apps/api/src/lib/jwt.ts:3`: `const SECRET = process.env.JWT_SECRET || "dev-secret-change-me"`. If the API is deployed without `JWT_SECRET`, it signs/verifies with a public string — a token forged as `{roleKey:"super_admin"}` was accepted by the app's own verify logic (proven locally). No boot-time check fails when the var is missing. **Fix:** throw on startup if `JWT_SECRET` is unset; delete the fallback. (This overlaps the §8 note that `JWT_SECRET` is "a placeholder" — the risk is specifically the silent default, and it is directly relevant to the Vercel deploy: set `JWT_SECRET` on the api project.)
+2. **MEDIUM-HIGH — IDOR / broken object-level auth on complaint creation.** `apps/api/src/routes/complaints.ts:88` writes `siteId` straight from the request body without verifying the site belongs to the caller. A customer POSTed a complaint against another customer's `siteId` → **201 Created**, and that complaint then surfaces in the attacker's own complaint list, leaking the victim's company name + order number. **Fix:** before create, load the site and require `site.order.customerId === req.auth.customerId`.
+3. **MEDIUM — no rate limiting / lockout on `/auth/login` and `/auth/customer/verify`.** 12 wrong passwords then the correct one still succeeds (no throttle); 15 wrong OTP codes all just return 401 (6-digit code, 10-min window, unlimited attempts → brute-forceable). **Fix:** add `express-rate-limit` and an OTP attempt cap.
+4. **LOW-MEDIUM — misc:** temp passwords use `Math.random()` not a CSPRNG (`users.ts:41,185`); `POST /users` doesn't set `mustChangePassword` (reset does — inconsistent, temp passwords persist); CORS is fully open (`index.ts` `app.use(cors())`); JWT stored in `localStorage` (XSS-exposable); `POST /auth/customer/register` returns distinguishable errors for unknown order vs unknown contact (order enumeration).
+
+**Functional bug — permission-less user gets a blank screen.** After a *successful* login, Finance (or any role with no accessible module) is left on `/login` where `AuthGuard` renders `null` instead of the existing "No modules enabled yet" screen (that screen only appears if you manually navigate to a guarded route). `apps/admin-web/src/components/AuthGuard.tsx` — the `isLoginPage → return null` branch short-circuits before the `!firstLanding(...)` NoAccessScreen branch. **Fix:** render `NoAccessScreen` for an authenticated staff user with no landing even while on the auth pages.
+
+**How to reproduce the test locally:** `.env` (root) or `apps/api/.env` needs `DATABASE_URL` + `DIRECT_URL` (Postgres) and `JWT_SECRET`; then `npm run build --workspace=packages/shared`, `prisma migrate deploy`, seed (`tsx apps/api/prisma/seed.ts`), start the API and `next dev -p 6001`. Staff logins are the §7 accounts (all `changeme123`); customer via `ORD-2026-0001` + `+919900011122` (dev OTP echoed on screen). Screenshots for all roles were captured but are not committed (dev artifacts).
+
+## 17. Security fixes applied + deployment (2026-07-02)
+The §16 findings were fixed and verified locally, then committed on branch
+`claude/karate-app-security-audit-yieiko` (commit `59b10a1`).
+
+**What changed (code)**
+- `apps/api/src/lib/jwt.ts` — removed the `"dev-secret-change-me"` fallback; the module now **throws at startup if `JWT_SECRET` is unset** (fail-loud). ⚠️ *Deployment implication:* every environment scope (Production **and** Preview) must have `JWT_SECRET` set, or the api function crashes on cold start.
+- `apps/api/src/routes/complaints.ts` — `POST /complaints` now loads the target site and rejects (403) unless `site.order.customerId === req.auth.customerId`. Verified: cross-customer → 403, own site → 201.
+- `apps/api/src/middleware/rateLimit.ts` (new) + `apps/api/src/routes/auth.ts` — fixed-window limiter (10 / 15 min / IP) on login, OTP request and OTP verify. Verified: 401s then 429. *In-memory, so per-instance on serverless — see the file header for the shared-store upgrade path.*
+- `apps/api/src/routes/users.ts` — temp passwords via `crypto.randomBytes` (not `Math.random`); `mustChangePassword: true` set on user creation.
+- `apps/admin-web/src/components/AuthGuard.tsx` — an authenticated user with no accessible module (e.g. Finance) now sees the "No modules enabled yet" screen instead of a blank page. Verified in-browser.
+
+Both apps `tsc --noEmit` clean; `apps/api` `npm run build` and `apps/admin-web` `npm run build` both succeed.
+
+**Deployment topology (confirmed live 2026-07-02)**
+- Two Vercel projects under team `ferose-salahudeen-s-projects`: **platino-recd-api** (`prj_grBAwYFoVIjJAtJg3uo3FqsPALrh`, framework express) and **platino-recd-admin-web** (`prj_Ozx4HCxv3FNyIog1asayGUQ1I7wA`, nextjs). Both are Git-connected: **push to `master` → production**, push to any other branch → preview.
+- Supabase project `vpvrdjqmyymyrkmynfxy` (ap-northeast-1) is the database.
+- Production is healthy: `https://platino-recd-api.vercel.app/health` → `{"ok":true}`, `https://platino-recd-admin-web.vercel.app/login` renders. **Production is still commit `78ec595` (master) — it does NOT yet contain the fixes above.**
+- The fix branch auto-deployed as a **preview** (`dpl_m5xW…`), built READY, and its `/health` returns 200 — which also confirms `JWT_SECRET` is present in the **Preview** env scope.
+
+**Env vars — not wired from this session.** There is no Vercel MCP tool to create/read/update environment variables, and no `VERCEL_TOKEN` was available, so env vars could not be set programmatically here. They are already configured from prior deploys (the preview proves at least `DATABASE_URL` + `JWT_SECRET` exist in Preview). To change them, use the Vercel dashboard (Project → Settings → Environment Variables) or provide a Vercel API token. Required per project: **api** → `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET`, and `NODE_ENV=production` (so the customer OTP is never echoed in the response); **admin-web** → `NEXT_PUBLIC_API_URL` = `https://platino-recd-api.vercel.app` (baked at build → redeploy after any change).
+
+**To take the fixes to production:** merge `claude/karate-app-security-audit-yieiko` → `master` (production auto-deploys). Before doing so, confirm `JWT_SECRET` is set in the **Production** env scope of the api project — otherwise the new fail-loud check will crash the production function.

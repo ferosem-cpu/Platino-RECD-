@@ -138,13 +138,16 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     return isCustomerPortal ? <div className="min-h-screen bg-gray-50">{children}</div> : null;
   }
 
-  if (isLoginPage || isChangePasswordPage || isCustomerPortal) {
-    return null;
-  }
-
-  // Staff with no accessible module at all (e.g. a brand-new role with no permissions).
+  // Staff with no accessible module at all (e.g. Finance, or a brand-new role with no
+  // permissions). They have nowhere to be redirected, so the effect above leaves them on
+  // /login - check this BEFORE the auth-page null-return below, otherwise they'd just see a
+  // blank white screen after a successful sign-in instead of an explanation.
   if (!firstLanding(user.permissions)) {
     return <NoAccessScreen name={user.name} onLogout={logout} />;
+  }
+
+  if (isLoginPage || isChangePasswordPage || isCustomerPortal) {
+    return null;
   }
 
   // Block rendering a page the user can't access (the effect above redirects them).

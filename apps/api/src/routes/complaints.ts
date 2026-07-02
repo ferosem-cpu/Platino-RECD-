@@ -80,6 +80,18 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   if (!req.auth!.customerId) return res.status(403).json({ error: "Only customers can raise complaints" });
 
+  // Object-level authorization: a customer may only raise complaints against their own sites.
+  // Without this a customer could pass any siteId and attach a ticket to another customer's site
+  // (and leak that customer's details back through their own complaint list).
+  const targetSite = await prisma.site.findUnique({
+    where: { id: parsed.data.siteId },
+    include: { order: true },
+  });
+  if (!targetSite) return res.status(404).json({ error: "Site not found" });
+  if (targetSite.order.customerId !== req.auth!.customerId) {
+    return res.status(403).json({ error: "You can only raise complaints for your own sites" });
+  }
+
   const ticketNumber = `TCK-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
   const complaint = await prisma.complaint.create({
     data: {

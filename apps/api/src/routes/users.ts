@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { createUserSchema, updateUserSchema, PERMISSION_KEY, ROLE_KEY, VENDOR_STATUS } from "@recd/shared";
 import { asString } from "../lib/params";
@@ -7,6 +8,12 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 
 export const usersRouter = Router();
 usersRouter.use(authenticate);
+
+// Cryptographically-secure temp password. Math.random() is not a CSPRNG and must never be used
+// for anything credential-shaped; base64url of 12 random bytes gives ~96 bits of entropy.
+function generateTempPassword(): string {
+  return crypto.randomBytes(12).toString("base64url");
+}
 
 usersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (_req, res) => {
   const users = await prisma.user.findMany({
@@ -38,7 +45,7 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
     if (vendor.status !== VENDOR_STATUS.APPROVED) return res.status(400).json({ error: "Vendor is not approved yet" });
   }
 
-  const tempPassword = Math.random().toString(36).slice(2, 10);
+  const tempPassword = generateTempPassword();
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
   const user = await prisma.user.create({
@@ -49,6 +56,9 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
       roleId: role.id,
       vendorId: parsed.data.vendorId,
       passwordHash,
+      // Force a change on first sign-in so the admin-relayed temp password can't linger as a
+      // permanent credential (mirrors the reset-password flow below).
+      mustChangePassword: true,
       createdById: req.auth!.userId,
     },
   });
@@ -182,7 +192,7 @@ usersRouter.post("/:id/reset-password", requirePermission(PERMISSION_KEY.MANAGE_
   const existing = await prisma.user.findUnique({ where: { id } });
   if (!existing) return res.status(404).json({ error: "User not found" });
 
-  const tempPassword = Math.random().toString(36).slice(2, 10);
+  const tempPassword = generateTempPassword();
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
   await prisma.user.update({

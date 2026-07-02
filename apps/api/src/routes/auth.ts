@@ -5,8 +5,14 @@ import { prisma } from "../lib/prisma";
 import { signToken } from "../lib/jwt";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { authenticate, AuthenticatedRequest } from "../middleware/auth";
+import { rateLimit } from "../middleware/rateLimit";
 
 export const authRouter = Router();
+
+// Throttle the credential/OTP endpoints: 10 attempts per IP per 15 minutes. Enough for a real
+// user fumbling a password or OTP, far below what a brute-force needs against an 8-char password
+// or a 6-digit code.
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyPrefix: "auth" });
 
 /** Get current session profile. */
 authRouter.get("/me", authenticate, async (req: AuthenticatedRequest, res) => {
@@ -40,7 +46,7 @@ authRouter.get("/me", authenticate, async (req: AuthenticatedRequest, res) => {
 });
 
 /** Email/password login for internal roles (everyone except customer). */
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", authLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -60,7 +66,7 @@ authRouter.post("/login", async (req, res) => {
 });
 
 /** Customer OTP register / request. */
-authRouter.post("/customer/register", async (req, res) => {
+authRouter.post("/customer/register", authLimiter, async (req, res) => {
   const { orderNumber, phone } = req.body;
   if (!orderNumber || !phone) {
     return res.status(400).json({ error: "Order number and phone number are required" });
@@ -116,7 +122,7 @@ authRouter.post("/customer/register", async (req, res) => {
 });
 
 /** Customer OTP verification. */
-authRouter.post("/customer/verify", async (req, res) => {
+authRouter.post("/customer/verify", authLimiter, async (req, res) => {
   const { orderNumber, phone, code } = req.body;
   if (!orderNumber || !phone || !code) {
     return res.status(400).json({ error: "Order number, phone number, and OTP code are required" });
@@ -182,7 +188,7 @@ authRouter.post("/customer/verify", async (req, res) => {
  * SMS: SMS is a deferred/stubbed channel in Phase 1 (see project notes), email is live.
  * Swap the delivery channel here once SMS is activated - nothing else about this flow changes.
  */
-authRouter.post("/otp/request", async (req, res) => {
+authRouter.post("/otp/request", authLimiter, async (req, res) => {
   const parsed = requestOtpSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -204,7 +210,7 @@ authRouter.post("/otp/request", async (req, res) => {
   res.json({ ok: true, message: "OTP sent to your registered email" });
 });
 
-authRouter.post("/otp/verify", async (req, res) => {
+authRouter.post("/otp/verify", authLimiter, async (req, res) => {
   const parsed = verifyOtpSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 

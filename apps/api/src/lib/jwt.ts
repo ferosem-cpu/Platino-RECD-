@@ -1,6 +1,18 @@
 import jwt from "jsonwebtoken";
 
-const SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+// No fallback secret: a hardcoded default means anyone who has read the source can forge
+// tokens (including super_admin) against any deployment that forgot to set JWT_SECRET. Fail
+// loudly at startup instead so a misconfigured deploy never silently signs with a known key.
+function requireSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error(
+      "JWT_SECRET is not set. Refusing to start with an insecure default - set a long random JWT_SECRET.",
+    );
+  }
+  return secret;
+}
+const SECRET: string = requireSecret();
 const EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 
 export interface AuthTokenPayload {
