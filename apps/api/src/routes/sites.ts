@@ -16,14 +16,6 @@ import { asString, asOptionalString } from "../lib/params";
 export const sitesRouter = Router();
 sitesRouter.use(authenticate);
 
-async function assertSiteVisible(siteId: string, auth: AuthenticatedRequest["auth"]) {
-  const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: true } });
-  if (!site) return null;
-  if (auth!.customerId && site.order.customerId !== auth!.customerId) return undefined; // not theirs
-  if (auth!.vendorId && site.vendorId !== auth!.vendorId) return undefined; // not this vendor's site
-  return site;
-}
-
 sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
   const assignedToMe = asOptionalString(req.query.assigned_to) === "me";
   const where: Record<string, unknown> = {};
@@ -42,9 +34,6 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
 
 sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
   const siteId = asString(req.params.id);
-  const site = await assertSiteVisible(siteId, req.auth);
-  if (site === null) return res.status(404).json({ error: "Site not found" });
-  if (site === undefined) return res.status(403).json({ error: "Forbidden" });
 
   const detail = await prisma.site.findUnique({
     where: { id: siteId },
@@ -61,6 +50,13 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
       pendingActions: { orderBy: { createdAt: "desc" } },
     },
   });
+  if (!detail) return res.status(404).json({ error: "Site not found" });
+  if (req.auth!.customerId && detail.order.customerId !== req.auth!.customerId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  if (req.auth!.vendorId && detail.vendorId !== req.auth!.vendorId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
   res.json(detail);
 });
 
