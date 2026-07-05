@@ -13,7 +13,7 @@ Turborepo monorepo, **npm workspaces**, TypeScript end‑to‑end. Working dir: 
 | `apps/mobile` | Field/customer mobile app | Expo / React Native (**not runtime‑tested**) |
 | `packages/shared` | Cross‑app contracts | Zod schemas, constants, DTO types |
 
-**Database:** Supabase Postgres (region `ap-northeast-1`), reached via **poolers** (direct connection needs IPv6) — transaction pooler `:6543?pgbouncer=true` for queries, session pooler `:5432` for migrations. Migration applied + seeded. Creds live only in gitignored `apps/api/.env`.
+**Database:** Supabase Postgres (region `ap-south-1`, Mumbai — see §16 for migration history), reached via **poolers** (direct connection needs IPv6) — transaction pooler `:6543?pgbouncer=true` for queries, session pooler `:5432` for migrations. Migration applied + seeded. Creds live only in gitignored `apps/api/.env`.
 
 ## 3. Core architecture principle — "data, not code"
 Anything that might grow a new value later — **stages, roles, permissions, statuses, photo checkpoints, structure types** — is a **row in a table**, never a hardcoded enum. Adding a new stage/role/status later is a DB insert, not a code change. The only real enum is the structural `SitcPhase`. This is the literal mechanism behind "keep everything future‑ready."
@@ -196,10 +196,40 @@ Both apps `tsc --noEmit` clean; `apps/api` `npm run build` and `apps/admin-web` 
 
 **Deployment topology (confirmed live 2026-07-02)**
 - Two Vercel projects under team `ferose-salahudeen-s-projects`: **platino-recd-api** (`prj_grBAwYFoVIjJAtJg3uo3FqsPALrh`, framework express) and **platino-recd-admin-web** (`prj_Ozx4HCxv3FNyIog1asayGUQ1I7wA`, nextjs). Both are Git-connected: **push to `master` → production**, push to any other branch → preview.
-- Supabase project `vpvrdjqmyymyrkmynfxy` (ap-northeast-1) is the database.
+- Supabase project `vpvrdjqmyymyrkmynfxy` (ap-northeast-1, Tokyo) was the database at time of audit. **Since migrated to `qpysyuysgcsrpvlxdglk` (ap-south-1, Mumbai) — see §18.**
 - Production is healthy: `https://platino-recd-api.vercel.app/health` → `{"ok":true}`, `https://platino-recd-admin-web.vercel.app/login` renders. **Production is still commit `78ec595` (master) — it does NOT yet contain the fixes above.**
 - The fix branch auto-deployed as a **preview** (`dpl_m5xW…`), built READY, and its `/health` returns 200 — which also confirms `JWT_SECRET` is present in the **Preview** env scope.
 
 **Env vars — not wired from this session.** There is no Vercel MCP tool to create/read/update environment variables, and no `VERCEL_TOKEN` was available, so env vars could not be set programmatically here. They are already configured from prior deploys (the preview proves at least `DATABASE_URL` + `JWT_SECRET` exist in Preview). To change them, use the Vercel dashboard (Project → Settings → Environment Variables) or provide a Vercel API token. Required per project: **api** → `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET`, and `NODE_ENV=production` (so the customer OTP is never echoed in the response); **admin-web** → `NEXT_PUBLIC_API_URL` = `https://platino-recd-api.vercel.app` (baked at build → redeploy after any change).
 
 **To take the fixes to production:** merge `claude/karate-app-security-audit-yieiko` → `master` (production auto-deploys). Before doing so, confirm `JWT_SECRET` is set in the **Production** env scope of the api project — otherwise the new fail-loud check will crash the production function.
+
+## 18. Database migration — Tokyo → Mumbai (2026-07-04/05)
+
+**What changed:** The Supabase project was migrated from the original Tokyo region (`ap-northeast-1`) to a dedicated Mumbai project (`ap-south-1`) to reduce latency for the primary userbase in India.
+
+| | Old (Tokyo) | New (Mumbai) |
+|---|---|---|
+| Supabase project | `vpvrdjqmyymyrkmynfxy` | `qpysyuysgcsrpvlxdglk` |
+| Project name | ferosem-cpu's Project | platino-recd-mumbai |
+| Region | ap-northeast-1 | ap-south-1 |
+| Status | ACTIVE_HEALTHY (still running) | ACTIVE_HEALTHY (production) |
+
+**How the migration was done:** The full schema was recreated from source and applied as a single Supabase migration (`20260705022134_initial_schema_recreate_from_source`). All three original Prisma migrations are reflected in `_prisma_migrations` on the new project. RLS (Row Level Security) is enabled on every public table — this was carried over from the old project's `enable_rls_all_public_tables` migration.
+
+**Schema is identical** to the Prisma schema in `apps/api/prisma/schema.prisma` — no columns were added or removed during the migration. Seed + live data was loaded into the new project:
+
+| Table | Rows |
+|---|---|
+| Role | 10 |
+| Permission | 12 |
+| RolePermission | 50 |
+| User | 15 |
+| Vendor | 5 |
+| Complaint | 4 |
+| NotificationLog | 36 |
+| Customer / Order / Site | 1 each |
+
+**What you need to update in Vercel:** Both the admin-web and api Vercel projects have env vars pointing to the old Tokyo pooler URLs (`DATABASE_URL`, `DIRECT_URL`). These must be updated to the new Mumbai pooler URLs from the Supabase dashboard (`Project Settings → Database → Connection string`). After updating, trigger a fresh Vercel deploy (not Redeploy — see §9) to pick up the new creds.
+
+**Local `.env`:** `apps/api/.env` also needs `DATABASE_URL` and `DIRECT_URL` updated to point at the new Mumbai project before local `prisma migrate` or `prisma generate` will work against the right DB.
