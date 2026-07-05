@@ -240,3 +240,18 @@ Both apps `tsc --noEmit` clean; `apps/api` `npm run build` and `apps/admin-web` 
 A fresh production deploy was triggered immediately after and is **Ready**. Login at `https://platino-recd-api.vercel.app/auth/login` returns HTTP 200 — DB connection confirmed live against Mumbai. Note: Mumbai uses `aws-1-ap-south-1.pooler.supabase.com` (not `aws-0`) — this is correct for the `ap-south-1` region.
 
 **Local `.env`:** `apps/api/.env` has also been updated to the Mumbai pooler URLs — local `prisma migrate` / `prisma generate` work against the correct DB.
+
+## 19. Fix — data rendering still slow after the Mumbai migration (2026-07-05, commit `5b5f254`)
+
+**Root cause:** moving the database to Mumbai bought no latency win, because the Vercel **api** function was never moved with it — it was still pinned to `iad1` (Washington D.C., US East), the Vercel default. Confirmed via `get_deployment`: `"regions": ["iad1"]` on the pre-fix deployment. Every request was still paying the same cross-continent round trip (browser in India → `iad1` → Mumbai DB → back) that existed before the migration, just to a different DB city than Tokyo. Pages that fire several sequential API calls on load (dashboard, sites list) compounded this.
+
+**Fix applied:**
+- `apps/api/vercel.json` — added `"regions": ["bom1"]` (Vercel's Mumbai region), pinning api compute next to the Mumbai Supabase project. Confirmed Hobby-tier projects can set a single region this way (no plan upgrade needed) — Vercel docs: "Hobby plans support one region; Pro and Enterprise support multiple regions."
+- `apps/api/src/routes/sites.ts` — `GET /sites/:id` was doing two sequential DB round-trips per request (a visibility-check `findUnique`, then a second full-detail `findUnique`). Collapsed into one query, with the same customer/vendor permission checks applied to its result. Removed the now-dead `assertSiteVisible` helper.
+
+**Verified:**
+- `tsc --noEmit` and `npm run build --workspace=apps/api` clean.
+- Locally against the live Mumbai DB (via `preview_start`, api on `:4001` / admin-web on `:6001`): logged in as Management, opened Sites → site detail — full nested order/customer/stage/vendor/photos/timeline data rendered with no console or server errors, confirming the collapsed query preserves the original 404/403 semantics.
+- Pushed to `master` (commit `5b5f254`) → Vercel auto-deployed `dpl_7Yfdxx1og8LUVFwSvBfJiCeHSNYm`, confirmed **READY** with `"regions": ["bom1"]`. Production `/health` and `/auth/login` both return 200 on the new deployment.
+
+**Not done:** `apps/admin-web` was left on its default Vercel region — it's client-rendered (the browser calls `NEXT_PUBLIC_API_URL` directly per §9), so admin-web's own region doesn't sit on the DB latency path and wasn't part of this fix.
