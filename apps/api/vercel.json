@@ -6,5 +6,11 @@
       "source": "/(.*)",
       "destination": "/api/index"
     }
+  ],
+  "crons": [
+    {
+      "path": "/amc-orders/send-expiry-reminders",
+      "schedule": "0 3 * * *"
+    }
   ]
 }

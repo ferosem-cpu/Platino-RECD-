@@ -13,6 +13,23 @@ interface AmcOrderRow {
   amcFrequencyPerYear: number;
   status: string;
   customer: { id: string; name: string };
+  lastExpiryReminderAt: string | null;
+  expiryReminderClearedAt: string | null;
+}
+
+const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
+
+function amcExpiryDate(poDate: string): Date {
+  const d = new Date(poDate);
+  d.setFullYear(d.getFullYear() + 1);
+  return d;
+}
+
+/** Mirrors the server's reminder window (see apps/api/src/routes/amcOrders.ts) - reminders start 1 month before expiry. */
+function isInReminderWindow(order: AmcOrderRow): boolean {
+  if (order.expiryReminderClearedAt) return false;
+  const expiry = amcExpiryDate(order.poDate);
+  return Date.now() >= expiry.getTime() - ONE_MONTH_MS;
 }
 
 interface Counts {
@@ -51,6 +68,7 @@ export default function AmcOrdersPage() {
   const [savingCustomer, setSavingCustomer] = useState(false);
   const [orderFormError, setOrderFormError] = useState<string | null>(null);
   const [customerFormError, setCustomerFormError] = useState<string | null>(null);
+  const [clearingId, setClearingId] = useState<string | null>(null);
 
   const [orderForm, setOrderForm] = useState({
     poNo: "",
@@ -133,6 +151,19 @@ export default function AmcOrdersPage() {
       setCustomerFormError(err instanceof Error ? err.message : "Failed to create customer");
     } finally {
       setSavingCustomer(false);
+    }
+  }
+
+  async function clearReminder(id: string) {
+    if (!confirm("Mark this AMC as acquired/renewed? This stops the expiry reminders for it.")) return;
+    setClearingId(id);
+    try {
+      await api(`/amc-orders/${id}/clear-reminder`, { method: "PATCH" });
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear reminder");
+    } finally {
+      setClearingId(null);
     }
   }
 
@@ -221,27 +252,53 @@ export default function AmcOrdersPage() {
                 <th className="px-4 py-3">Qty</th>
                 <th className="px-4 py-3">AMC Frequency per Year</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Expiry</th>
+                <th className="px-4 py-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {orders.map((o, idx) => (
-                <tr key={o.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3">{idx + 1}</td>
-                  <td className="px-4 py-3 font-mono text-xs font-semibold">{o.poNo}</td>
-                  <td className="px-4 py-3">{new Date(o.poDate).toLocaleDateString()}</td>
-                  <td className="px-4 py-3">{o.customer.name}</td>
-                  <td className="px-4 py-3">{o.location}</td>
-                  <td className="px-4 py-3">{o.item}</td>
-                  <td className="px-4 py-3">{o.qty}</td>
-                  <td className="px-4 py-3">{o.amcFrequencyPerYear}</td>
-                  <td className="px-4 py-3">
-                    <span className={statusPill(o.status)}>{pretty(o.status)}</span>
-                  </td>
-                </tr>
-              ))}
+              {orders.map((o, idx) => {
+                const expiry = amcExpiryDate(o.poDate);
+                const cleared = !!o.expiryReminderClearedAt;
+                const dueForReminder = isInReminderWindow(o);
+                return (
+                  <tr key={o.id} className="hover:bg-gray-50/60">
+                    <td className="px-4 py-3">{idx + 1}</td>
+                    <td className="px-4 py-3 font-mono text-xs font-semibold">{o.poNo}</td>
+                    <td className="px-4 py-3">{new Date(o.poDate).toLocaleDateString()}</td>
+                    <td className="px-4 py-3">{o.customer.name}</td>
+                    <td className="px-4 py-3">{o.location}</td>
+                    <td className="px-4 py-3">{o.item}</td>
+                    <td className="px-4 py-3">{o.qty}</td>
+                    <td className="px-4 py-3">{o.amcFrequencyPerYear}</td>
+                    <td className="px-4 py-3">
+                      <span className={statusPill(o.status)}>{pretty(o.status)}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div>{expiry.toLocaleDateString()}</div>
+                      {cleared ? (
+                        <span className="text-[10px] font-semibold text-emerald-600">AMC Acquired</span>
+                      ) : dueForReminder ? (
+                        <span className="text-[10px] font-semibold text-red-600">Renewal due</span>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {!cleared && (
+                        <button
+                          onClick={() => clearReminder(o.id)}
+                          disabled={clearingId === o.id}
+                          className="rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                        >
+                          {clearingId === o.id ? "Saving…" : "AMC Acquired"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {orders.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={11} className="px-4 py-12 text-center text-gray-400">
                     No AMC orders found.
                     <br />
                     <span className="text-xs">Create a new AMC order to get started.</span>

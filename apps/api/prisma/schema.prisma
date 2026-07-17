@@ -88,6 +88,7 @@ model User {
   otpCodes             OtpCode[]
   vendorsApproved      Vendor[]           @relation("VendorApprover")
   amcOrdersCreated     AmcOrder[]         @relation("AmcOrderCreatedBy")
+  amcExpiryRemindersCleared AmcOrder[]    @relation("AmcExpiryClearedBy")
 }
 
 model OtpCode {
@@ -413,6 +414,13 @@ model AmcOrder {
   createdById         String?
   createdBy           User?    @relation("AmcOrderCreatedBy", fields: [createdById], references: [id])
   createdAt           DateTime @default(now())
+
+  /// AMC expiry = poDate + 1 year. Reminders start 1 month before expiry and repeat
+  /// every 3 days (see the send-expiry-reminders cron route) until cleared below.
+  lastExpiryReminderAt     DateTime?
+  expiryReminderClearedAt  DateTime?
+  expiryReminderClearedById String?
+  expiryReminderClearedBy  User?     @relation("AmcExpiryClearedBy", fields: [expiryReminderClearedById], references: [id])
 }
 
 // ---------------------------------------------------------------------------
