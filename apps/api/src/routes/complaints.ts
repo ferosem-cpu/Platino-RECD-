@@ -1,5 +1,8 @@
 import { Router } from "express";
 import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COMPLAINT_STATUS, ROLE_KEY } from "@recd/shared";
+
+/** Statuses that count as "resolved" for the one-open-complaint-per-RECD-serial-number rule. */
+const CLOSED_COMPLAINT_STATUSES: string[] = [COMPLAINT_STATUS.RESOLVED, COMPLAINT_STATUS.CLOSED];
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
@@ -92,6 +95,16 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
     return res.status(403).json({ error: "You can only raise complaints for your own sites" });
   }
 
+  // Only one complaint may be open against a given RECD serial number (site) at a time.
+  const openComplaint = await prisma.complaint.findFirst({
+    where: { siteId: parsed.data.siteId, status: { notIn: CLOSED_COMPLAINT_STATUSES } },
+  });
+  if (openComplaint) {
+    return res.status(400).json({
+      error: `An open complaint (${openComplaint.ticketNumber}) already exists for this RECD serial number. It must be closed before raising another.`,
+    });
+  }
+
   const ticketNumber = `TCK-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
   const complaint = await prisma.complaint.create({
     data: {
@@ -99,8 +112,10 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
       customerId: req.auth!.customerId,
       siteId: parsed.data.siteId,
       category: parsed.data.category,
+      issueCategory: parsed.data.issueCategory,
       description: parsed.data.description,
       severity: parsed.data.severity,
+      attachmentUrl: parsed.data.attachmentUrl,
       status: COMPLAINT_STATUS.OPEN,
     },
   });
@@ -134,6 +149,8 @@ complaintsRouter.patch(
       status: parsed.data.status,
       rootCause: parsed.data.rootCause,
       resolutionNotes: parsed.data.resolutionNotes,
+      remarks: parsed.data.remarks,
+      serviceReportUrl: parsed.data.serviceReportUrl,
       closedAt: parsed.data.status === COMPLAINT_STATUS.CLOSED ? new Date() : undefined,
     };
     if (canManage && parsed.data.assignedToId !== undefined) {
@@ -167,3 +184,13 @@ complaintsRouter.patch(
     res.json(complaint);
   },
 );
+
+/** Remove a spam / wrong-RECD-serial-number complaint entry. Manager-only, hard delete. */
+complaintsRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  const existing = await prisma.complaint.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: "Complaint not found" });
+
+  await prisma.complaint.delete({ where: { id } });
+  res.status(204).send();
+});

@@ -75,6 +75,8 @@ export const PERMISSION_KEY = {
   ACT_ASSIGNED_COMPLAINTS: "act_assigned_complaints",
   /** Review, approve/reject vendor registrations and assign vendors to sites. */
   MANAGE_VENDORS: "manage_vendors",
+  /** Create/view AMC (Annual Maintenance Contract) orders. */
+  MANAGE_AMC_ORDERS: "manage_amc_orders",
 } as const;
 export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];
 
@@ -134,3 +136,42 @@ export const VENDOR_STATUS = {
   REJECTED: "rejected",
 } as const;
 export type VendorStatus = (typeof VENDOR_STATUS)[keyof typeof VENDOR_STATUS];
+
+/** Fine-grained issue picker on the customer complaint form, alongside the broader `category`. */
+export const ISSUE_CATEGORY = {
+  ALARM_ISSUE: "alarm_issue",
+  PRESSURE_SENSOR: "pressure_sensor",
+  TEMPERATURE_SENSOR: "temperature_sensor",
+  CONTROLLER_HMI_ISSUE: "controller_hmi_issue",
+  ELECTRICAL_ISSUE: "electrical_issue",
+  PM_SERVICE: "pm_service",
+  BREAKDOWN_SERVICE: "breakdown_service",
+  SPARE_REPLACEMENT: "spare_replacement",
+  INSTALLATION_COMMISSIONING_ISSUE: "installation_commissioning_issue",
+  FAULT_CODE: "fault_code",
+  ABNORMAL_BACK_PRESSURE: "abnormal_back_pressure",
+  OTHER: "other",
+} as const;
+export type IssueCategory = (typeof ISSUE_CATEGORY)[keyof typeof ISSUE_CATEGORY];
+
+export const ISSUE_CATEGORY_LABELS: Record<string, string> = {
+  [ISSUE_CATEGORY.ALARM_ISSUE]: "Alarm Issue",
+  [ISSUE_CATEGORY.PRESSURE_SENSOR]: "Pressure Sensor",
+  [ISSUE_CATEGORY.TEMPERATURE_SENSOR]: "Temperature Sensor",
+  [ISSUE_CATEGORY.CONTROLLER_HMI_ISSUE]: "Controller/HMI Issue",
+  [ISSUE_CATEGORY.ELECTRICAL_ISSUE]: "Electrical Issue",
+  [ISSUE_CATEGORY.PM_SERVICE]: "PM Service",
+  [ISSUE_CATEGORY.BREAKDOWN_SERVICE]: "Breakdown Service",
+  [ISSUE_CATEGORY.SPARE_REPLACEMENT]: "Spare Replacement",
+  [ISSUE_CATEGORY.INSTALLATION_COMMISSIONING_ISSUE]: "Installation/Commissioning Issue",
+  [ISSUE_CATEGORY.FAULT_CODE]: "Fault Code",
+  [ISSUE_CATEGORY.ABNORMAL_BACK_PRESSURE]: "Abnormal Back Pressure",
+  [ISSUE_CATEGORY.OTHER]: "Other",
+};
+
+export const AMC_ORDER_STATUS = {
+  YET_TO_START: "yet_to_start",
+  IN_PROGRESS: "in_progress",
+  COMPLETED: "completed",
+} as const;
+export type AmcOrderStatus = (typeof AMC_ORDER_STATUS)[keyof typeof AMC_ORDER_STATUS];

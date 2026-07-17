@@ -87,6 +87,7 @@ model User {
   createdBy            User?              @relation("CreatedBy", fields: [createdById], references: [id])
   otpCodes             OtpCode[]
   vendorsApproved      Vendor[]           @relation("VendorApprover")
+  amcOrdersCreated     AmcOrder[]         @relation("AmcOrderCreatedBy")
 }
 
 model OtpCode {
@@ -114,6 +115,7 @@ model Customer {
   contacts  User[]   @relation("CustomerContacts")
   orders    Order[]
   complaints Complaint[]
+  amcOrders  AmcOrder[]
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -184,6 +186,12 @@ model Site {
   gpsLng            Decimal? @db.Decimal(9, 6)
   assignedEngineerId String?
   assignedEngineer   User?   @relation("AssignedEngineer", fields: [assignedEngineerId], references: [id])
+
+  /// Company details form the customer fills in manually after logging into the portal
+  /// (address/dgCapacityKva/dgModel below double as the rest of that form). Null until submitted.
+  companyName     String?
+  sitePocName     String?
+  sitePocNumber   String?
 
   /// The external vendor company responsible for erecting this site (null = handled internally).
   vendorId String?
@@ -367,6 +375,8 @@ model Complaint {
   siteId         String?
   site           Site?     @relation(fields: [siteId], references: [id])
   category       String    // erection_commissioning | delivery_delay | non_performance
+  /// Finer-grained issue picker shown alongside category - see ISSUE_CATEGORY in packages/shared.
+  issueCategory  String?
   description    String
   severity       String    // low | medium | high | critical
   status         String    @default("open") // see COMPLAINT_STATUS in packages/shared
@@ -374,8 +384,35 @@ model Complaint {
   assignedTo     User?     @relation("AssignedTo", fields: [assignedToId], references: [id])
   rootCause      String?
   resolutionNotes String?
+  /// Customer-supplied photo at raise time (RECD/DG nameplate) - data URL, same pattern as SitePhoto.
+  attachmentUrl  String?
+  /// Staff-entered remarks while managing the ticket - distinct from resolutionNotes (closure summary).
+  remarks        String?
+  /// Staff-uploaded service report while managing the ticket - data URL, PDF/JPG/PNG.
+  serviceReportUrl String?
   createdAt      DateTime  @default(now())
   closedAt       DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// AMC (Annual Maintenance Contract) orders
+// ---------------------------------------------------------------------------
+
+model AmcOrder {
+  id                  String   @id @default(cuid())
+  poNo                String
+  poDate              DateTime
+  customerId          String
+  customer            Customer @relation(fields: [customerId], references: [id])
+  location             String
+  item                String
+  qty                 Int
+  amcFrequencyPerYear Int
+  /// yet_to_start | in_progress | completed - see AMC_ORDER_STATUS in packages/shared
+  status              String   @default("yet_to_start")
+  createdById         String?
+  createdBy           User?    @relation("AmcOrderCreatedBy", fields: [createdById], references: [id])
+  createdAt           DateTime @default(now())
 }
 
 // ---------------------------------------------------------------------------

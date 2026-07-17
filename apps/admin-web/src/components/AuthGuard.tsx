@@ -15,10 +15,11 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/vendors": ["manage_vendors"],
   "/users": ["manage_users"],
   "/settings": ["manage_settings"],
+  "/amc-orders": ["manage_amc_orders"],
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
-const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/vendors", "/users", "/settings"];
+const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/vendors", "/users", "/amc-orders", "/settings"];
 
 function canAccess(permissions: string[], route: string): boolean {
   const required = ROUTE_PERMISSIONS[route];

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { loginSchema, requestOtpSchema, verifyOtpSchema } from "@recd/shared";
+import { loginSchema, requestOtpSchema, verifyOtpSchema, customerRegisterSchema, customerVerifySchema } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { signToken } from "../lib/jwt";
 import { send as sendNotification } from "../services/notifications/notificationService";
@@ -67,10 +67,9 @@ authRouter.post("/login", authLimiter, async (req, res) => {
 
 /** Customer OTP register / request. */
 authRouter.post("/customer/register", authLimiter, async (req, res) => {
-  const { orderNumber, phone } = req.body;
-  if (!orderNumber || !phone) {
-    return res.status(400).json({ error: "Order number and phone number are required" });
-  }
+  const parsed = customerRegisterSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { orderNumber, phone } = parsed.data;
 
   const order = await prisma.order.findUnique({
     where: { orderNumber },
@@ -123,10 +122,9 @@ authRouter.post("/customer/register", authLimiter, async (req, res) => {
 
 /** Customer OTP verification. */
 authRouter.post("/customer/verify", authLimiter, async (req, res) => {
-  const { orderNumber, phone, code } = req.body;
-  if (!orderNumber || !phone || !code) {
-    return res.status(400).json({ error: "Order number, phone number, and OTP code are required" });
-  }
+  const parsed = customerVerifySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { orderNumber, phone, code } = parsed.data;
 
   const order = await prisma.order.findUnique({
     where: { orderNumber },

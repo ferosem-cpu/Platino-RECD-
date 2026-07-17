@@ -5,12 +5,26 @@ export const loginSchema = z.object({
   password: z.string().min(8),
 });
 
+/** E.164-ish mobile number: optional leading +, 8-15 digits, no leading zero. */
+export const MOBILE_NUMBER_REGEX = /^\+?[1-9]\d{7,14}$/;
+
 export const requestOtpSchema = z.object({
-  phone: z.string().min(8),
+  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
 });
 
 export const verifyOtpSchema = z.object({
-  phone: z.string().min(8),
+  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
+  code: z.string().length(6),
+});
+
+export const customerRegisterSchema = z.object({
+  orderNumber: z.string().min(1),
+  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
+});
+
+export const customerVerifySchema = z.object({
+  orderNumber: z.string().min(1),
+  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
   code: z.string().length(6),
 });
 
@@ -45,16 +59,40 @@ export const uploadSitePhotoSchema = z.object({
 export const createComplaintSchema = z.object({
   siteId: z.string(),
   category: z.string(),
+  issueCategory: z.string().optional(),
   description: z.string().min(1),
   severity: z.enum(["low", "medium", "high", "critical"]),
+  /** Photo of the RECD/DG nameplate - mandatory on the customer complaint form. */
+  attachmentUrl: z.string().min(1, "A photo attachment is required"),
 });
 
 export const updateComplaintStatusSchema = z.object({
   status: z.string(),
   rootCause: z.string().optional(),
   resolutionNotes: z.string().optional(),
+  remarks: z.string().optional(),
+  serviceReportUrl: z.string().optional(),
   /** Only complaint managers (service team / management) may (re)assign; field engineers cannot. */
   assignedToId: z.string().nullable().optional(),
+});
+
+export const siteCompanyDetailsSchema = z.object({
+  companyName: z.string().min(1),
+  address: z.string().min(1),
+  dgCapacityKva: z.number().positive(),
+  dgModel: z.string().min(1),
+  sitePocName: z.string().min(1),
+  sitePocNumber: z.string().min(1),
+});
+
+export const createAmcOrderSchema = z.object({
+  poNo: z.string().min(1),
+  poDate: z.string().datetime(),
+  customerId: z.string(),
+  location: z.string().min(1),
+  item: z.string().min(1),
+  qty: z.number().int().positive(),
+  amcFrequencyPerYear: z.number().int().positive(),
 });
 
 export const resolvePendingActionSchema = z.object({

@@ -4,6 +4,7 @@ import {
   confirmExhaustHookupSchema,
   uploadSitePhotoSchema,
   assignSiteVendorSchema,
+  siteCompanyDetailsSchema,
   PERMISSION_KEY,
   PENDING_ACTION_CATEGORY,
   VENDOR_STATUS,
@@ -59,6 +60,40 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
   }
   res.json(detail);
 });
+
+/**
+ * The customer-filled "Company Details" form shown on the portal after registration
+ * (see login/customer portal). Customer-only, restricted to their own site.
+ */
+sitesRouter.patch(
+  "/:id/company-details",
+  requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS),
+  async (req: AuthenticatedRequest, res) => {
+    const parsed = siteCompanyDetailsSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    if (!req.auth!.customerId) return res.status(403).json({ error: "Only customers can submit company details" });
+
+    const siteId = asString(req.params.id);
+    const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: true } });
+    if (!site) return res.status(404).json({ error: "Site not found" });
+    if (site.order.customerId !== req.auth!.customerId) {
+      return res.status(403).json({ error: "You can only update your own site" });
+    }
+
+    const updated = await prisma.site.update({
+      where: { id: siteId },
+      data: {
+        companyName: parsed.data.companyName,
+        address: parsed.data.address,
+        dgCapacityKva: parsed.data.dgCapacityKva,
+        dgModel: parsed.data.dgModel,
+        sitePocName: parsed.data.sitePocName,
+        sitePocNumber: parsed.data.sitePocNumber,
+      },
+    });
+    res.json(updated);
+  },
+);
 
 sitesRouter.post(
   "/:id/stage-events",

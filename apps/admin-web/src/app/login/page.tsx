@@ -157,8 +157,9 @@ export default function LoginPage() {
         {activeTab === "staff" && (
           <form onSubmit={handleStaffSubmit} className="space-y-4">
             <div>
-              <label className={labelCls}>Email</label>
+              <label className={labelCls}>User Name</label>
               <input type="email" required className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} />
+              <p className="mt-1 text-[11px] text-gray-400">Only users who have created and registered an account can sign in.</p>
             </div>
             <div>
               <label className={labelCls}>Password</label>
@@ -177,13 +178,26 @@ export default function LoginPage() {
             {!otpSent ? (
               <form onSubmit={handleCustomerRequestOtp} className="space-y-4">
                 <div>
-                  <label className={labelCls}>Order ID</label>
+                  <label className={labelCls}>RECD Serial Number</label>
                   <input type="text" required placeholder="e.g. ORD-2026-0001" className={inputCls} value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)} />
                 </div>
                 <div>
                   <label className={labelCls}>Phone Number</label>
-                  <input type="tel" required placeholder="e.g. +919900011122" className={inputCls} value={phone} onChange={(e) => setPhone(e.target.value)} />
+                  <input
+                    type="tel"
+                    required
+                    pattern="^\+?[1-9]\d{7,14}$"
+                    title="Enter a valid mobile number"
+                    placeholder="e.g. +919900011122"
+                    className={inputCls}
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
                 </div>
+                <p className="text-[11px] text-gray-400 -mt-2">
+                  A valid mobile number is required to receive the OTP. Only one complaint may be open against a
+                  RECD serial number at a time.
+                </p>
                 {customerError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{customerError}</div>}
                 <button type="submit" disabled={customerLoading} className="btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-50">
                   {customerLoading ? "Sending OTP..." : "Get One-Time Password"}

@@ -3,6 +3,18 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/AuthContext";
 import { api } from "@/lib/apiClient";
+import { ISSUE_CATEGORY_LABELS } from "@recd/shared";
+
+const ISSUE_CATEGORY_OPTIONS = Object.entries(ISSUE_CATEGORY_LABELS);
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 interface StageDefinition {
   id: string;
@@ -42,6 +54,10 @@ interface SiteDetail {
   id: string;
   address: string | null;
   dgCapacityKva: number | null;
+  dgModel: string | null;
+  companyName: string | null;
+  sitePocName: string | null;
+  sitePocNumber: string | null;
   currentStage: StageDefinition;
   order: {
     orderNumber: string;
@@ -76,11 +92,27 @@ export default function CustomerPortalPage() {
   // New Complaint Form
   const [category, setCategory] = useState("erection_commissioning");
   const [severity, setSeverity] = useState("medium");
+  const [issueCategory, setIssueCategory] = useState(ISSUE_CATEGORY_OPTIONS[0][0]);
   const [description, setDescription] = useState("");
+  const [complaintRemarks, setComplaintRemarks] = useState("");
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const [submittingComplaint, setSubmittingComplaint] = useState(false);
   const [complaintSuccess, setComplaintSuccess] = useState<string | null>(null);
   const [complaintError, setComplaintError] = useState<string | null>(null);
   const [resolvingAction, setResolvingAction] = useState<string | null>(null);
+
+  // Company Details Form
+  const [companyDetails, setCompanyDetails] = useState({
+    companyName: "",
+    address: "",
+    dgCapacityKva: "",
+    dgModel: "",
+    sitePocName: "",
+    sitePocNumber: "",
+  });
+  const [savingCompanyDetails, setSavingCompanyDetails] = useState(false);
+  const [companyDetailsError, setCompanyDetailsError] = useState<string | null>(null);
+  const [companyDetailsSaved, setCompanyDetailsSaved] = useState(false);
 
   async function loadData() {
     try {
@@ -95,6 +127,14 @@ export default function CustomerPortalPage() {
         // Fetch detailed site view (includes events, photos, pendingActions)
         const detail = await api<SiteDetail>(`/sites/${sitesData[0].id}`);
         setSite(detail);
+        setCompanyDetails({
+          companyName: detail.companyName ?? "",
+          address: detail.address ?? "",
+          dgCapacityKva: detail.dgCapacityKva != null ? String(detail.dgCapacityKva) : "",
+          dgModel: detail.dgModel ?? "",
+          sitePocName: detail.sitePocName ?? "",
+          sitePocNumber: detail.sitePocNumber ?? "",
+        });
       }
 
       // Fetch complaints
@@ -126,30 +166,69 @@ export default function CustomerPortalPage() {
     }
   }
 
+  async function submitCompanyDetails(e: React.FormEvent) {
+    e.preventDefault();
+    if (!site) return;
+    setSavingCompanyDetails(true);
+    setCompanyDetailsError(null);
+    setCompanyDetailsSaved(false);
+    try {
+      await api(`/sites/${site.id}/company-details`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          companyName: companyDetails.companyName,
+          address: companyDetails.address,
+          dgCapacityKva: parseFloat(companyDetails.dgCapacityKva),
+          dgModel: companyDetails.dgModel,
+          sitePocName: companyDetails.sitePocName,
+          sitePocNumber: companyDetails.sitePocNumber,
+        }),
+      });
+      setCompanyDetailsSaved(true);
+      await loadData();
+    } catch (err) {
+      setCompanyDetailsError(err instanceof Error ? err.message : "Failed to save company details");
+    } finally {
+      setSavingCompanyDetails(false);
+    }
+  }
+
   async function handleComplaintSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!site) return;
+    if (!attachmentFile) {
+      setComplaintError("Please attach a photo of the RECD & DG Name Plate.");
+      return;
+    }
     setSubmittingComplaint(true);
     setComplaintSuccess(null);
     setComplaintError(null);
 
     try {
+      const attachmentUrl = await fileToDataUrl(attachmentFile);
+      const fullDescription = complaintRemarks
+        ? `${description}\n\nRemarks: ${complaintRemarks}`
+        : description;
       await api("/complaints", {
         method: "POST",
         body: JSON.stringify({
           siteId: site.id,
           category,
+          issueCategory,
           severity,
-          description,
+          description: fullDescription,
+          attachmentUrl,
         }),
       });
-      setComplaintSuccess("Support ticket raised successfully!");
+      setComplaintSuccess("Complaint submitted successfully!");
       setDescription("");
+      setComplaintRemarks("");
+      setAttachmentFile(null);
       // Reload complaints
       const complaintsData = await api<Complaint[]>("/complaints");
       setComplaints(complaintsData);
     } catch (err) {
-      setComplaintError(err instanceof Error ? err.message : "Failed to raise support ticket");
+      setComplaintError(err instanceof Error ? err.message : "Failed to raise complaint");
     } finally {
       setSubmittingComplaint(false);
     }
@@ -211,7 +290,7 @@ export default function CustomerPortalPage() {
                   <p className="text-xs text-gray-500 mt-1">Model: {site.order.product.model} | Capacity: {site.dgCapacityKva ?? site.order.product.model.match(/\d+/)?.[0]} kVA</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs font-semibold text-gray-500">Order ID</p>
+                  <p className="text-xs font-semibold text-gray-500">RECD Serial Number</p>
                   <p className="text-base font-bold font-mono text-[var(--theme-primary)]">{site.order.orderNumber}</p>
                   <p className="text-xs text-gray-400 mt-1">Date: {new Date(site.order.orderDate).toLocaleDateString()}</p>
                 </div>
@@ -379,31 +458,81 @@ export default function CustomerPortalPage() {
           )}
         </div>
 
-        {/* Right Column: Support and Complaints */}
+        {/* Right Column: Company Details, Support and Complaints */}
         <div className="space-y-8">
-          
-          {/* Help & Support Ticket Form */}
+
+          {/* Company Details Form */}
+          {site && (
+            <section className="card p-6 border border-gray-200">
+              <h3 className="text-md font-bold mb-1">Company Details</h3>
+              <p className="text-xs text-gray-500 mb-4">
+                RECD Serial Number: <span className="font-mono font-semibold text-[var(--theme-primary)]">{site.order.orderNumber}</span>{" "}
+                <span className="text-gray-400">(auto-filled after login)</span>
+              </p>
+
+              <form onSubmit={submitCompanyDetails} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Company Name *</label>
+                  <input required className="field w-full" placeholder="Enter Company Name" value={companyDetails.companyName} onChange={(e) => setCompanyDetails({ ...companyDetails, companyName: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Address *</label>
+                  <input required className="field w-full" placeholder="Enter Address" value={companyDetails.address} onChange={(e) => setCompanyDetails({ ...companyDetails, address: e.target.value })} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">KVA *</label>
+                    <input required type="number" min={0} step="0.01" className="field w-full" placeholder="Enter KVA" value={companyDetails.dgCapacityKva} onChange={(e) => setCompanyDetails({ ...companyDetails, dgCapacityKva: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">RECD Model *</label>
+                    <input required className="field w-full" placeholder="Enter RECD Model" value={companyDetails.dgModel} onChange={(e) => setCompanyDetails({ ...companyDetails, dgModel: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Site POC Name *</label>
+                  <input required className="field w-full" placeholder="Enter Site POC Name" value={companyDetails.sitePocName} onChange={(e) => setCompanyDetails({ ...companyDetails, sitePocName: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Site POC Number *</label>
+                  <input required className="field w-full" placeholder="Enter Site POC Number" value={companyDetails.sitePocNumber} onChange={(e) => setCompanyDetails({ ...companyDetails, sitePocNumber: e.target.value })} />
+                </div>
+                <p className="text-[11px] text-red-500">* All fields are mandatory.</p>
+
+                {companyDetailsError && <div className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{companyDetailsError}</div>}
+                {companyDetailsSaved && <div className="rounded-lg bg-green-50 p-3 text-xs text-green-700">Company details saved.</div>}
+
+                <button type="submit" disabled={savingCompanyDetails} className="w-full btn-primary py-2 text-sm font-semibold disabled:opacity-50">
+                  {savingCompanyDetails ? "Saving…" : "Save company details"}
+                </button>
+              </form>
+            </section>
+          )}
+
+          {/* Complaint Ticket Form */}
           <section className="card p-6">
-            <h3 className="text-md font-bold mb-2">Raise Support Ticket</h3>
-            <p className="text-xs text-gray-500 mb-4">Encountered an issue? Raise a support request, and our service team will contact you.</p>
+            <h3 className="text-md font-bold mb-2">Complaint Ticket</h3>
+            <p className="text-xs text-gray-500 mb-4">Encountered an issue? Raise a complaint, and our service team will contact you.</p>
 
             <form onSubmit={handleComplaintSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Issue Category</label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Complaint Type *</label>
                 <select
+                  required
                   className="field w-full"
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                 >
-                  <option value="erection_commissioning">Erection / Commissioning</option>
+                  <option value="erection_commissioning">Erection & Commissioning</option>
                   <option value="delivery_delay">Delivery Delay</option>
-                  <option value="non_performance">Performance / Technical Issue</option>
+                  <option value="non_performance">Performance & Technical Issue</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Urgency</label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Urgency *</label>
                 <select
+                  required
                   className="field w-full"
                   value={severity}
                   onChange={(e) => setSeverity(e.target.value)}
@@ -416,15 +545,54 @@ export default function CustomerPortalPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Describe the issue</label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Issue Category *</label>
+                <select
+                  required
+                  className="field w-full"
+                  value={issueCategory}
+                  onChange={(e) => setIssueCategory(e.target.value)}
+                >
+                  {ISSUE_CATEGORY_OPTIONS.map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Issue Details / Description *</label>
                 <textarea
                   required
                   rows={3}
-                  placeholder="Provide details about the issue..."
+                  placeholder="Please provide detailed information about the issue..."
                   className="field w-full"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Remarks</label>
+                <textarea
+                  rows={2}
+                  placeholder="Add any additional remarks (optional)..."
+                  className="field w-full"
+                  value={complaintRemarks}
+                  onChange={(e) => setComplaintRemarks(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Attachment (Photo is mandatory) *</label>
+                <input
+                  required
+                  type="file"
+                  accept="image/*"
+                  className="field w-full text-xs"
+                  onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
+                />
+                <p className="mt-1 text-[10px] text-gray-400">
+                  Only image files are accepted and must be clear and readable. Please attach RECD & DG Name Plate.
+                </p>
               </div>
 
               {complaintSuccess && (
@@ -443,7 +611,7 @@ export default function CustomerPortalPage() {
                 disabled={submittingComplaint}
                 className="w-full btn-primary py-2 text-sm font-semibold disabled:opacity-50"
               >
-                {submittingComplaint ? "Submitting..." : "Submit Ticket"}
+                {submittingComplaint ? "Submitting..." : "Submit Complaint"}
               </button>
             </form>
           </section>
