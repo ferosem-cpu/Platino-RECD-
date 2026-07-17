@@ -24,6 +24,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.MANAGE_SETTINGS, name: "Manage company settings and theming" },
     { key: PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS, name: "Act on complaints assigned to you" },
     { key: PERMISSION_KEY.MANAGE_VENDORS, name: "Approve and manage external vendors" },
+    { key: PERMISSION_KEY.MANAGE_AMC_ORDERS, name: "Create / view AMC orders" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
