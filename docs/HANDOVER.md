@@ -325,3 +325,15 @@ Implements a batch of UI/workflow changes supplied as a PPTX (`Platino RECD trak
 - WhatsApp Business API and Telegram bot are not connected - reminders on those channels will keep logging `pending_provider_setup` until `providers.ts`'s `WhatsAppProvider`/`TelegramProvider` are implemented for real.
 - The cron endpoint has no logging/alerting on failure beyond whatever Vercel's function logs capture - if the daily cron silently stops firing (e.g. Hobby-plan cron limits, a bad deploy), nobody gets told. Worth a dead-man's-switch check later if this becomes business-critical.
 - Reminder cadence (3 days) and lead time (1 month) are hardcoded constants (`ONE_MONTH_MS`, `THREE_DAYS_MS` in `amcOrders.ts`) rather than data-driven - fine for now, but if these ever need to be configurable per-customer or per-order, they're not there yet.
+
+## 23. AMC Type field - CAMC / NAMC (2026-07-30, commit `ed05560`)
+
+**Source:** `App Correction.pptx` (`G:\My Drive\Platino AI enablement\`) - single requirement: add an "AMC Type" dropdown (CAMC = Comprehensive, NAMC = Non-Comprehensive) to the AMC order creation form, shown as its own column in the AMC Order List.
+
+**Implementation:** new `AmcOrder.amcType` column (`String`, default `'camc'` - the one existing production row was backfilled to `camc` by the migration default, not left null). `AMC_TYPE` (`camc`/`namc`) and `AMC_TYPE_LABELS` (`"CAMC (Comprehensive)"` / `"NAMC (Non-Comprehensive)"`) added to `packages/shared/src/constants.ts`, following the same picker pattern as `ISSUE_CATEGORY`/`ISSUE_CATEGORY_LABELS` (§20) - a plain object map, not a Prisma enum, per this project's "lookup values are data, not code" convention. `createAmcOrderSchema` now requires `amcType: z.enum(["camc", "namc"])`. Migration `20260730121803_add_amc_type`, applied directly to production the same way as every other migration this project uses (Supabase MCP `apply_migration`, explicit user authorization already standing for this workflow).
+
+**Frontend:** "AMC Type" dropdown added to the Create New Order modal (defaults to the first `AMC_TYPE_LABELS` entry, i.e. CAMC); "AMC Type" column added to the AMC Order List table, between "AMC Frequency per Year" and "Status".
+
+**Verified live in production:** `tsc --noEmit` clean on `apps/api` and `apps/admin-web`, `npm run build` clean on both `packages/shared` and `apps/admin-web` (new column visible in the `/amc-orders` build output size). Chrome extension was unreachable at verification time, so confirmed via a direct authenticated API call instead (`POST /auth/login` → `GET /amc-orders`) - the existing production AMC order (Sundaram Textiles, PO `PL-09867123`) correctly returns `"amcType": "camc"`. Not click-tested in the browser UI itself - do that (create a new order with NAMC selected, confirm the column renders) next time the extension is available.
+
+**Incidental observation, not part of this change:** the same API call showed `expiryReminderClearedAt` is now set on that order (2026-07-21) - someone used the "AMC Acquired" button for real since §22 was verified, which is the feature working as intended in the wild.
