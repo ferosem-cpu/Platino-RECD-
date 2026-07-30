@@ -409,6 +409,8 @@ model AmcOrder {
   item                String
   qty                 Int
   amcFrequencyPerYear Int
+  /// camc | namc - see AMC_TYPE in packages/shared
+  amcType             String   @default("camc")
   /// yet_to_start | in_progress | completed - see AMC_ORDER_STATUS in packages/shared
   status              String   @default("yet_to_start")
   createdById         String?

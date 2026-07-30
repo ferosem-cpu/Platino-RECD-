@@ -105,6 +105,7 @@ amcOrdersRouter.post("/", async (req: AuthenticatedRequest, res) => {
       item: parsed.data.item,
       qty: parsed.data.qty,
       amcFrequencyPerYear: parsed.data.amcFrequencyPerYear,
+      amcType: parsed.data.amcType,
       status: AMC_ORDER_STATUS.YET_TO_START,
       createdById: req.auth!.userId,
     },

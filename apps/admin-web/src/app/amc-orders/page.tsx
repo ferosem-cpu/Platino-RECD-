@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { AMC_TYPE_LABELS } from "@recd/shared";
+
+const AMC_TYPE_OPTIONS = Object.entries(AMC_TYPE_LABELS);
 
 interface AmcOrderRow {
   id: string;
@@ -11,6 +14,7 @@ interface AmcOrderRow {
   item: string;
   qty: number;
   amcFrequencyPerYear: number;
+  amcType: string;
   status: string;
   customer: { id: string; name: string };
   lastExpiryReminderAt: string | null;
@@ -78,6 +82,7 @@ export default function AmcOrdersPage() {
     item: "",
     qty: "1",
     amcFrequencyPerYear: "1",
+    amcType: AMC_TYPE_OPTIONS[0][0],
   });
 
   const [customerForm, setCustomerForm] = useState({
@@ -116,10 +121,11 @@ export default function AmcOrdersPage() {
           item: orderForm.item,
           qty: parseInt(orderForm.qty, 10) || 1,
           amcFrequencyPerYear: parseInt(orderForm.amcFrequencyPerYear, 10) || 1,
+          amcType: orderForm.amcType,
         }),
       });
       setOrderModalOpen(false);
-      setOrderForm({ poNo: "", poDate: today(), customerId: "", location: "", item: "", qty: "1", amcFrequencyPerYear: "1" });
+      setOrderForm({ poNo: "", poDate: today(), customerId: "", location: "", item: "", qty: "1", amcFrequencyPerYear: "1", amcType: AMC_TYPE_OPTIONS[0][0] });
       load();
     } catch (err) {
       setOrderFormError(err instanceof Error ? err.message : "Failed to create AMC order");
@@ -251,6 +257,7 @@ export default function AmcOrdersPage() {
                 <th className="px-4 py-3">Item</th>
                 <th className="px-4 py-3">Qty</th>
                 <th className="px-4 py-3">AMC Frequency per Year</th>
+                <th className="px-4 py-3">AMC Type</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Expiry</th>
                 <th className="px-4 py-3 text-right">Action</th>
@@ -271,6 +278,7 @@ export default function AmcOrdersPage() {
                     <td className="px-4 py-3">{o.item}</td>
                     <td className="px-4 py-3">{o.qty}</td>
                     <td className="px-4 py-3">{o.amcFrequencyPerYear}</td>
+                    <td className="px-4 py-3">{AMC_TYPE_LABELS[o.amcType] ?? o.amcType}</td>
                     <td className="px-4 py-3">
                       <span className={statusPill(o.status)}>{pretty(o.status)}</span>
                     </td>
@@ -298,7 +306,7 @@ export default function AmcOrdersPage() {
               })}
               {orders.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={12} className="px-4 py-12 text-center text-gray-400">
                     No AMC orders found.
                     <br />
                     <span className="text-xs">Create a new AMC order to get started.</span>
@@ -359,6 +367,19 @@ export default function AmcOrdersPage() {
                   <label className="block text-xs font-medium text-gray-500 mb-1">AMC Frequency / Year</label>
                   <input required type="number" min={1} className="field w-full" value={orderForm.amcFrequencyPerYear} onChange={(e) => setOrderForm({ ...orderForm, amcFrequencyPerYear: e.target.value })} />
                 </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">AMC Type</label>
+                <select
+                  required
+                  className="field w-full"
+                  value={orderForm.amcType}
+                  onChange={(e) => setOrderForm({ ...orderForm, amcType: e.target.value })}
+                >
+                  {AMC_TYPE_OPTIONS.map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
               </div>
 
               {orderFormError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{orderFormError}</p>}

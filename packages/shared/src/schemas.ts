@@ -93,6 +93,7 @@ export const createAmcOrderSchema = z.object({
   item: z.string().min(1),
   qty: z.number().int().positive(),
   amcFrequencyPerYear: z.number().int().positive(),
+  amcType: z.enum(["camc", "namc"]),
 });
 
 export const resolvePendingActionSchema = z.object({

@@ -175,3 +175,14 @@ export const AMC_ORDER_STATUS = {
   COMPLETED: "completed",
 } as const;
 export type AmcOrderStatus = (typeof AMC_ORDER_STATUS)[keyof typeof AMC_ORDER_STATUS];
+
+export const AMC_TYPE = {
+  CAMC: "camc",
+  NAMC: "namc",
+} as const;
+export type AmcType = (typeof AMC_TYPE)[keyof typeof AMC_TYPE];
+
+export const AMC_TYPE_LABELS: Record<string, string> = {
+  [AMC_TYPE.CAMC]: "CAMC (Comprehensive)",
+  [AMC_TYPE.NAMC]: "NAMC (Non-Comprehensive)",
+};
