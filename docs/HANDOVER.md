@@ -530,16 +530,65 @@ exists email logs an error and reports the notification undelivered.
 - Customer login diffed against its pre-port snapshot (see §24.3).
 - Repo-wide grep for `Zan-F` / `Zan-APP` / `zanApp` / `zanf` / personal email addresses - no hits.
 
-**Not verified:** the migration has **not been applied to any database** - no Postgres was
-reachable during this work, so the SQL was written by hand against the Prisma schema and reviewed,
-not executed. Apply it the same way §20-§23 were (Supabase MCP `apply_migration`, with explicit
-authorization) and reconcile `_prisma_migrations` afterwards. Nothing was click-tested in a
-browser either; every new page is typecheck- and build-clean only.
+### 24.7 Migration applied + click-tested (2026-08-25)
+
+The migration was applied to `platino-recd-mumbai` (`qpysyuysgcsrpvlxdglk`) via Supabase MCP
+`apply_migration`, the four `DocumentRequirementType` rows were seeded, and the customer login
+flow was click-tested end-to-end in a real browser against the live DB (not just typecheck).
+
+**One real conflict, fixed.** The first `apply_migration` attempt failed:
+`column "pinCode" of relation "CompanySettings" already exists`. Postgres DDL is transactional, so
+the whole batch rolled back cleanly (confirmed via `list_tables` before retrying - none of the new
+tables existed yet). Investigation found `CompanySettings.pinCode` was already on the live DB from
+an **untracked-in-git** migration (`_prisma_migrations` shows `20260721120000_add_header_footer_settings`,
+applied 2026-07-21, with no corresponding folder anywhere in this repo's history) - same shape
+(`TEXT`, nullable) the port needed, so the migration file was edited to drop that one line and
+reuse the existing column instead of re-adding it (commit `3a257fb`, after the branch's original
+`7742f15`). Re-applied clean; the new migration was also recorded in `_prisma_migrations` by hand
+(the Supabase MCP tool runs raw SQL, it doesn't touch Prisma's own tracking table).
+
+**A second, unrelated drift surfaced while investigating the above, not fixed:**
+`_prisma_migrations` only has 4 rows (`init`, `add_auth_and_settings`, `add_vendors`,
+`add_header_footer_settings`) even though the live schema actually reflects migrations through
+§23 (`add_amc_type`) - the three AMC-era migrations were applied to the schema without ever being
+recorded in that table. This predates this port and wasn't touched, but `prisma migrate deploy`
+will be confused by it (it'll see `add_amc_orders_...`, `add_amc_expiry_reminder_fields` and
+`add_amc_type` as "not yet applied" and try to re-run DDL that's already there) until someone
+reconciles the table - either backfill the three missing rows, or `prisma migrate resolve
+--applied` each one.
+
+**Security advisors** after the migration: only the same `rls_enabled_no_policy` INFO-level notice
+every other table in this DB already has (RLS on, zero policies, default-deny to the anon key,
+Prisma's own connection bypasses it) - nothing new.
+
+**Click-test:** Customer tab → `ORD-2026-0001` / `+919900011122` → dev-mode OTP shown on-screen
+(SMTP unset, so `EmailProvider` degraded to its console/dev-mode path exactly as designed, did not
+throw) → verified → **full customer portal rendered**: order status, SITC milestone timeline with
+history, the Company Details form, the complaint form, and three seeded support tickets. Confirmed
+via the JWT payload that the session really is `roleKey: "customer"`, not a staff account.
+
+One more pre-existing data anomaly found and fixed along the way: the seeded customer contact
+(`cmqneogms001j8hnxentpqt7t`, "Suresh Sundaram") had `mustChangePassword: true` on the live row,
+even though `seed.ts` has always explicitly set that to `false` for this user (customers
+authenticate via OTP, not a password, so the flag is meaningless for them but `AuthGuard` still
+redirects on it regardless of role). Corrected directly via SQL to match what `seed.ts` intends;
+not a port-introduced bug, and not chased further since the login/portal flow it was blocking is
+now confirmed working.
+
+**Minor naming leftover spotted, not fixed:** `apps/admin-web/src/components/DataTable.tsx` keys
+its column-visibility `localStorage` entries as `zan-app:columns:${storageKey}`. Cosmetic (a stale
+prefix from the fork, doesn't leak anything, doesn't collide with anything else in this app), but
+worth renaming to `recd:columns:...` next time that file is touched.
+
+**Still not verified:** the in-app agent (needs `AGENT_SECRETS_KEY` + an LLM provider configured
+first), Google sign-in (`GOOGLE_CLIENT_ID`), Drive integration, and real SMTP delivery - all
+correctly degrade to "not configured" rather than erroring, per §24.5, but none has been exercised
+with real credentials yet.
 
 **Follow-ups if this branch is merged:**
-1. Apply the migration, then re-run the seed (or insert the four `DocumentRequirementType` rows
-   directly) - §21's lesson about `PERMISSION_KEY` applies to seeded lookup rows too. No new
-   permission keys were added by this port, so no `Permission`/`RolePermission` backfill is needed.
-2. Set whichever env vars from §24.5 the business actually wants live.
-3. Add a `crons` entry for `GET /agent/cron/cleanup-conversations` if agent history should expire.
-4. Click-test the new pages, and confirm customer login still works end-to-end after deploy.
+1. Set whichever env vars from §24.5 the business actually wants live (SMTP first, most valuable).
+2. Add a `crons` entry for `GET /agent/cron/cleanup-conversations` if agent history should expire.
+3. Reconcile the `_prisma_migrations` drift described above before anyone runs `prisma migrate
+   deploy` against this database.
+4. Click-test the remaining new pages (Customers, Products, Order detail, Reports, Vendors
+   archiving) - only the customer login/portal path has been exercised in a real browser so far.
