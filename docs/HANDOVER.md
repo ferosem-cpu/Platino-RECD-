@@ -606,11 +606,23 @@ This port never wrote to the `Vendor` table. Worth cleaning up since it's a name
 leftover sitting in production data, but that's a data decision for the business owner, not
 something to silently delete.
 
+### 24.9 Migration log reconciled + test vendor removed (2026-08-25)
+
+Both closed same-day, since all data in this database is confirmed test data (nothing to preserve):
+
+- **`_prisma_migrations` drift (§24.7) fixed.** `npx prisma migrate resolve --applied` run for
+  each of the three untracked AMC migrations (`add_amc_orders_company_details_complaint_fields`,
+  `add_amc_expiry_reminder_fields`, `add_amc_type`) - this only writes a "done" row per migration
+  into Prisma's own log table, it does not touch any schema or data. `npx prisma migrate status`
+  now reports **"Database schema is up to date!"**. `prisma migrate deploy` is safe to run here
+  going forward.
+- **"Zan-F vendor" row (§24.8) deleted.** Confirmed zero dependent `User`/`Site` rows first
+  (`vendorId` count was 0/0), then removed. Vendor list is now the four vendors from this repo's
+  own seed/testing: Salem Fabrication Works, Coimbatore Erectors LLP, Test Erectors
+  1782803442496, UI Test Erectors 1782814602566.
+
 **Follow-ups if this branch is merged:**
 1. Set whichever env vars from §24.5 the business actually wants live (SMTP first, most valuable).
 2. Add a `crons` entry for `GET /agent/cron/cleanup-conversations` if agent history should expire.
-3. Reconcile the `_prisma_migrations` drift described in §24.7 before anyone runs `prisma migrate
-   deploy` against this database.
-4. Decide what to do about the pre-existing "Zan-F vendor" row in production data (§24.8).
-5. Rename the `DataTable.tsx` `localStorage` key prefix from `zan-app:` to `recd:` (§24.7,
+3. Rename the `DataTable.tsx` `localStorage` key prefix from `zan-app:` to `recd:` (§24.7,
    cosmetic, not urgent).
