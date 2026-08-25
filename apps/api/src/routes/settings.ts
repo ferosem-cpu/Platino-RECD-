@@ -26,22 +26,45 @@ settingsRouter.get("/", authenticate, async (req, res) => {
 
 // PUT /settings - Gated with MANAGE_SETTINGS
 settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SETTINGS), async (req: AuthenticatedRequest, res) => {
-  const { logoDataUrl, themeKey, customColors } = req.body;
+  const {
+    logoDataUrl,
+    themeKey,
+    customColors,
+    legalName,
+    address,
+    city,
+    pinCode,
+    email,
+    website,
+    phone,
+    documentFooterNote,
+    agentVisibleRoleKeys,
+    agentCustomInstructions,
+  } = req.body;
+
+  // Shared by both the update and create branches of the upsert - keeping one object means a
+  // new settings field can't silently be applied on update but dropped on first-ever create.
+  const fields = {
+    logoDataUrl,
+    themeKey,
+    customColors,
+    legalName,
+    address,
+    city,
+    pinCode,
+    email,
+    website,
+    phone,
+    documentFooterNote,
+    agentVisibleRoleKeys,
+    agentCustomInstructions,
+  };
 
   try {
     const settings = await prisma.companySettings.upsert({
       where: { id: "singleton" },
-      update: {
-        logoDataUrl,
-        themeKey,
-        customColors,
-      },
-      create: {
-        id: "singleton",
-        logoDataUrl,
-        themeKey,
-        customColors,
-      },
+      update: fields,
+      create: { id: "singleton", ...fields },
     });
     res.json(settings);
   } catch (error) {

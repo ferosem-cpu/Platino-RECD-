@@ -36,3 +36,8 @@ lookupsRouter.get("/products", async (_req, res) => {
   const products = await prisma.product.findMany({ orderBy: { model: "asc" } });
   res.json(products);
 });
+
+lookupsRouter.get("/document-requirement-types", async (_req, res) => {
+  const types = await prisma.documentRequirementType.findMany({ orderBy: { sequenceOrder: "asc" } });
+  res.json(types);
+});

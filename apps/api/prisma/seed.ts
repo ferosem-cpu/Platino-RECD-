@@ -6,6 +6,7 @@ import {
   STAGE_KEY,
   STATUS_OPTION_KEY,
   PHOTO_CHECKPOINT_KEY,
+  DOCUMENT_REQUIREMENT_TYPE_KEY,
 } from "@recd/shared";
 
 const prisma = new PrismaClient();
@@ -149,6 +150,23 @@ async function seedPhotoCheckpoints() {
   ];
   for (const c of checkpoints) {
     await prisma.photoCheckpoint.upsert({ where: { key: c.key }, update: c, create: c });
+  }
+}
+
+/**
+ * Site document requirement types (data-not-code): the set a site can require is seeded
+ * rows, not a code change - adding a new one later is a DB insert. Keys match
+ * DOCUMENT_REQUIREMENT_TYPE_KEY in packages/shared.
+ */
+async function seedDocumentRequirementTypes() {
+  const types: Array<{ key: string; label: string; sequenceOrder: number }> = [
+    { key: DOCUMENT_REQUIREMENT_TYPE_KEY.POLICE_VERIFICATION, label: "Police verification", sequenceOrder: 1 },
+    { key: DOCUMENT_REQUIREMENT_TYPE_KEY.ESIC, label: "ESIC", sequenceOrder: 2 },
+    { key: DOCUMENT_REQUIREMENT_TYPE_KEY.INSURANCE, label: "Insurance", sequenceOrder: 3 },
+    { key: DOCUMENT_REQUIREMENT_TYPE_KEY.PPE_KITS, label: "PPE kits", sequenceOrder: 4 },
+  ];
+  for (const t of types) {
+    await prisma.documentRequirementType.upsert({ where: { key: t.key }, update: t, create: t });
   }
 }
 
@@ -324,6 +342,7 @@ async function main() {
   await seedStages();
   await seedStatusOptions();
   await seedPhotoCheckpoints();
+  await seedDocumentRequirementTypes();
   const { customer } = await seedSampleUsers();
   const order = await seedSampleOrder(customer.id);
   const { approved } = await seedVendors();
