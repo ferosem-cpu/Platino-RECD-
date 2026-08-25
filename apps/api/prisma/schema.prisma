@@ -87,8 +87,11 @@ model User {
   createdBy            User?              @relation("CreatedBy", fields: [createdById], references: [id])
   otpCodes             OtpCode[]
   vendorsApproved      Vendor[]           @relation("VendorApprover")
+  vendorsArchived      Vendor[]           @relation("VendorArchiver")
   amcOrdersCreated     AmcOrder[]         @relation("AmcOrderCreatedBy")
   amcExpiryRemindersCleared AmcOrder[]    @relation("AmcExpiryClearedBy")
+  agentLlmProvidersCreated AgentLlmProvider[] @relation("AgentLlmProviderCreator")
+  agentConversations       AgentConversation[] @relation("AgentConversationUser")
 }
 
 model OtpCode {
@@ -124,7 +127,7 @@ model Customer {
 model Vendor {
   id           String    @id @default(cuid())
   name         String
-  /// "pending" | "approved" | "rejected" - see VENDOR_STATUS in packages/shared.
+  /// "pending" | "approved" | "rejected" | "archived" - see VENDOR_STATUS in packages/shared.
   status       String    @default("pending")
   contactName  String
   contactEmail String    @unique
@@ -133,6 +136,12 @@ model Vendor {
   approvedById String?
   approvedBy   User?     @relation("VendorApprover", fields: [approvedById], references: [id])
   approvedAt   DateTime?
+  /// Set when a Super Admin/Management archives this vendor (see routes/vendors.ts's
+  /// /:id/archive) - the vendor row and all its history (sites, complaints) stay intact,
+  /// this just records who pulled it out of active use and when.
+  archivedById String?
+  archivedBy   User?     @relation("VendorArchiver", fields: [archivedById], references: [id])
+  archivedAt   DateTime?
   createdAt    DateTime  @default(now())
 
   members User[] @relation("VendorMembers")
@@ -147,9 +156,19 @@ model Product {
   /// Drives structure/scaffold sizing later - RECD weight scales proportionately with this.
   capacityKva    Decimal? @db.Decimal(10, 2)
   warrantyMonths Int?
+  /// cylinder | triangle | rectangle (PRODUCT_SHAPE in packages/shared) - drives which
+  /// dimension fields are meaningful on the structure/scaffold sizing UI.
+  shape          String?
+  /// Free-text, e.g. "1200 x 600 x 900 mm" or "Ø800mm x 1500mm H" - format depends on shape.
+  dimensions     String?
+  weightKg       Decimal? @db.Decimal(10, 2)
+  /// 1 or 2 - the silencer type fitted to this RECD variant.
+  silencerType   Int?
   createdAt      DateTime @default(now())
 
-  orders Order[]
+  orders             Order[]
+  orderLineItems     OrderLineItem[]
+  recdDeliveries     RecdDelivery[]
 }
 
 // ---------------------------------------------------------------------------
@@ -164,8 +183,11 @@ model Order {
   productId                String
   product                  Product   @relation(fields: [productId], references: [id])
   quantity                 Int
-  value                    Decimal   @db.Decimal(12, 2)
-  orderDate                DateTime
+  /// Nullable: multi-site import (e.g. from a delivery-tracking sheet) creates operational
+  /// orders that don't have commercial figures yet - filled in later, or never. Sales-created
+  /// orders still set this at creation.
+  value                    Decimal?  @db.Decimal(12, 2)
+  orderDate                DateTime?
   promisedDeliveryDate     DateTime?
   actualDispatchDate       DateTime?
   /// Set by the sales engineer at order time - "replace_existing_silencer" | "add_after_existing_exhaust"
@@ -175,6 +197,26 @@ model Order {
   createdAt                DateTime  @default(now())
 
   site Site?
+  /// Additional RECD units delivered under this same order/site (e.g. a site takes a 500kva
+  /// and a 380kva together) - the order's own productId/quantity above remains "unit 1",
+  /// these are units 2+. A physically separate delivery/site instead gets its own sibling
+  /// Order+Site row.
+  lineItems OrderLineItem[]
+}
+
+/// A second (or third...) RECD product added to an existing order/site, for when multiple
+/// units are delivered to one physical location together. The alternative - a fully separate
+/// Order+Site pair sharing the same address - is used when the units are commercially/
+/// logistically distinct (different dispatch, etc). Both paths are exposed in the "Add
+/// another unit" UI on the site detail page; this is the "same order" one.
+model OrderLineItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int
+  createdAt DateTime @default(now())
 }
 
 model Site {
@@ -188,11 +230,20 @@ model Site {
   assignedEngineerId String?
   assignedEngineer   User?   @relation("AssignedEngineer", fields: [assignedEngineerId], references: [id])
 
-  /// Company details form the customer fills in manually after logging into the portal
-  /// (address/dgCapacityKva/dgModel below double as the rest of that form). Null until submitted.
+  /// "Site name" - the end-client / site-owner, i.e. the company that actually operates
+  /// this premises (distinct from Order.customer, who we're contracted with). Also doubles
+  /// as the Company Name captured by the customer-portal Company Details form (§20).
   companyName     String?
   sitePocName     String?
   sitePocNumber   String?
+
+  /// Google Drive folders for this site's photographs and drawings (company Drive account -
+  /// see lib/googleDrive.ts). Created on demand via POST /sites/:id/drive-folders. The *Url
+  /// fields are Drive's webViewLink, so the admin UI can link straight to the folder.
+  photosDriveFolderId    String?
+  photosDriveFolderUrl   String?
+  drawingsDriveFolderId  String?
+  drawingsDriveFolderUrl String?
 
   /// The external vendor company responsible for erecting this site (null = handled internally).
   vendorId String?
@@ -221,6 +272,80 @@ model Site {
   photos          SitePhoto[]
   pendingActions  PendingAction[]
   complaints      Complaint[]
+  contacts        SiteContact[]
+  documentRequirements SiteDocumentRequirement[]
+  recdDelivery    RecdDelivery?
+}
+
+// ---------------------------------------------------------------------------
+// Site contacts (one site can have several POCs - security desk, site engineer, etc.)
+// ---------------------------------------------------------------------------
+
+model SiteContact {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  name      String
+  phone     String?
+  email     String?
+  /// Free-text role/designation at the site, e.g. "Security head", "Facility manager".
+  role      String?
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Site document requirements (police verification, ESIC, insurance, PPE, ...)
+// ---------------------------------------------------------------------------
+
+/// Lookup table (data-not-code): the set of document types a site can require is seeded
+/// data, not a code change, so a new requirement type is a DB insert (see seed.ts).
+model DocumentRequirementType {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  label         String
+  sequenceOrder Int
+  createdAt     DateTime @default(now())
+
+  siteRequirements SiteDocumentRequirement[]
+}
+
+model SiteDocumentRequirement {
+  id                String                  @id @default(cuid())
+  siteId            String
+  site              Site                    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  requirementTypeId String
+  requirementType   DocumentRequirementType @relation(fields: [requirementTypeId], references: [id])
+  required          Boolean                 @default(false)
+  /// not_submitted | submitted | verified (free-form string, matches project convention)
+  status            String                  @default("not_submitted")
+  documentUrl       String?
+  notes             String?
+  updatedAt         DateTime                @updatedAt
+  createdAt         DateTime                @default(now())
+
+  @@unique([siteId, requirementTypeId])
+}
+
+// ---------------------------------------------------------------------------
+// RECD delivery tracking (per-site material delivery status)
+// ---------------------------------------------------------------------------
+
+model RecdDelivery {
+  id             String    @id @default(cuid())
+  siteId         String    @unique
+  site           Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  productId      String?
+  product        Product?  @relation(fields: [productId], references: [id])
+  quantity       Int?
+  /// pending | in_transit | delivered (free-form string, matches project convention)
+  deliveryStatus String    @default("pending")
+  statusNote     String?
+  /// Lower number = higher priority, matching the source delivery-tracking sheet.
+  priority       Int?
+  expectedDate   DateTime?
+  actualDate     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 // ---------------------------------------------------------------------------
@@ -446,4 +571,69 @@ model CompanySettings {
   logoDataUrl   String?
   themeKey      String   @default("emerald")
   customColors  Json?
+
+  /// Legal entity identity, printed as the letterhead on every DataTable "Print" view
+  /// (see components/DataTable.tsx). Deliberately excludes the bank/tax/terms fields the
+  /// upstream fork carries - those only exist for invoices/quotations/POs, which this app
+  /// does not have.
+  legalName            String?
+  address              String?
+  city                 String?
+  pinCode              String?
+  email                String?
+  website              String?
+  phone                String?
+  /// Free-text note printed in the footer of every printed list (editable in Settings).
+  documentFooterNote   String?
+
+  /// In-app agent visibility (§24): role keys allowed to see the floating chat bubble.
+  /// Empty array = hidden for everyone. Plain string array, not a relation/lookup table,
+  /// since this is a small admin-editable allowlist, not growing data.
+  agentVisibleRoleKeys String[] @default([])
+
+  /// Free-text instructions from the admin, appended to the in-app agent's system prompt
+  /// on every turn (e.g. "always confirm the site address before raising a complaint").
+  agentCustomInstructions String?
+}
+
+// ---------------------------------------------------------------------------
+// In-app agent
+// ---------------------------------------------------------------------------
+
+/// A user-configured LLM provider credential for the in-app agent. providerType is a plain
+/// string (not a Prisma enum) per the project's data-not-code convention - new providers
+/// (Google, Azure OpenAI, etc.) are a new adapter + a config row, not a migration. The API
+/// key itself is stored encrypted (see lib/crypto.ts) - never returned to the frontend after
+/// creation. Multiple rows can be active at once; the agent tries them in `priority` order
+/// (lowest first) and falls back to the next on failure.
+model AgentLlmProvider {
+  id                String   @id @default(cuid())
+  name              String   // user-given label, e.g. "My OpenAI key", "Groq fallback"
+  providerType      String   // 'anthropic' | 'openai_compatible' (adapter lookup key)
+  apiKeyCiphertext  String   // AES-256-GCM encrypted, base64 - never sent to the frontend
+  baseUrl           String?  // for openai_compatible custom endpoints (Groq/Together/OpenRouter/etc)
+  model             String   // model name to request from this provider
+  priority          Int      @default(0) // lower tried first
+  isActive          Boolean  @default(true)
+  createdById       String
+  createdBy         User     @relation("AgentLlmProviderCreator", fields: [createdById], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+/// One chat thread with the in-app agent. `messages` holds the full UnifiedMessage[] array
+/// (role/content/toolCalls/tool results) as JSON - a single-column blob rather than a
+/// separate per-message table, since threads are read/written whole (never queried per-
+/// message) and are short-lived (auto-deleted after 30 days by a daily cron). `title` is a
+/// short label derived from the first user message, shown in the conversation list.
+model AgentConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("AgentConversationUser", fields: [userId], references: [id], onDelete: Cascade)
+  title     String?
+  messages  Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
