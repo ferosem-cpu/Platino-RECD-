@@ -130,10 +130,47 @@ export const COMPLAINT_CATEGORY = {
 } as const;
 export type ComplaintCategory = (typeof COMPLAINT_CATEGORY)[keyof typeof COMPLAINT_CATEGORY];
 
+export const PRODUCT_SHAPE = {
+  CYLINDER: "cylinder",
+  TRIANGLE: "triangle",
+  RECTANGLE: "rectangle",
+} as const;
+export type ProductShape = (typeof PRODUCT_SHAPE)[keyof typeof PRODUCT_SHAPE];
+
+/** Seeded rows, not exhaustive - see seed.ts. These are the keys application code branches on. */
+export const DOCUMENT_REQUIREMENT_TYPE_KEY = {
+  POLICE_VERIFICATION: "police_verification",
+  ESIC: "esic",
+  INSURANCE: "insurance",
+  PPE_KITS: "ppe_kits",
+} as const;
+export type DocumentRequirementTypeKey =
+  (typeof DOCUMENT_REQUIREMENT_TYPE_KEY)[keyof typeof DOCUMENT_REQUIREMENT_TYPE_KEY];
+
+export const DOCUMENT_REQUIREMENT_STATUS = {
+  NOT_SUBMITTED: "not_submitted",
+  SUBMITTED: "submitted",
+  VERIFIED: "verified",
+} as const;
+export type DocumentRequirementStatus =
+  (typeof DOCUMENT_REQUIREMENT_STATUS)[keyof typeof DOCUMENT_REQUIREMENT_STATUS];
+
+export const RECD_DELIVERY_STATUS = {
+  PENDING: "pending",
+  IN_TRANSIT: "in_transit",
+  DELIVERED: "delivered",
+} as const;
+export type RecdDeliveryStatus = (typeof RECD_DELIVERY_STATUS)[keyof typeof RECD_DELIVERY_STATUS];
+
 export const VENDOR_STATUS = {
   PENDING: "pending",
   APPROVED: "approved",
   REJECTED: "rejected",
+  /** Was approved and doing real work, now deactivated (e.g. malpractice) - unlike REJECTED
+   * (never accepted), an archived vendor's history (sites, complaints) stays fully intact
+   * and attributed to it; it just drops out of every active selection (new site assignment,
+   * new engineer login). */
+  ARCHIVED: "archived",
 } as const;
 export type VendorStatus = (typeof VENDOR_STATUS)[keyof typeof VENDOR_STATUS];
 
