@@ -621,8 +621,40 @@ Both closed same-day, since all data in this database is confirmed test data (no
   own seed/testing: Salem Fabrication Works, Coimbatore Erectors LLP, Test Erectors
   1782803442496, UI Test Erectors 1782814602566.
 
-**Follow-ups if this branch is merged:**
+**Follow-ups:**
 1. Set whichever env vars from §24.5 the business actually wants live (SMTP first, most valuable).
 2. Add a `crons` entry for `GET /agent/cron/cleanup-conversations` if agent history should expire.
 3. Rename the `DataTable.tsx` `localStorage` key prefix from `zan-app:` to `recd:` (§24.7,
    cosmetic, not urgent).
+
+### 24.10 Merged to master (2026-08-25) — push + Vercel env vars still pending
+
+`feature/port-zan-app-nonfinance` (10 commits) merged into `master` locally with `--no-ff`,
+**no conflicts**: commit `f7a9124`. This is the merge commit message summarizing the whole port;
+see §24.1–24.9 above for the full detail.
+
+**Not pushed yet.** `git push origin master` was attempted and blocked by the harness's own safety
+classifier (pushing to the production branch is treated as high-stakes regardless of in-session
+confirmation). The merge exists only in the local `D:\Projects\Claude code` checkout right now.
+Someone needs to run, from that directory:
+```
+git push origin master
+```
+That push is what triggers Vercel's auto-deploy of both projects (`platino-recd-api`,
+`platino-recd-admin-web`) to production, per §9's Git-connected topology.
+
+**Vercel env vars for SMTP/Drive/Google/agent (§24.5) are not set either** - no tool available in
+this session can write Vercel project env vars (only read project settings), so those still need
+to be added by hand in each project's **Settings → Environment Variables**:
+- `platino-recd-api`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM_ADDRESS`,
+  `EMAIL_BRAND_NAME`, `AGENT_SECRETS_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_ID`,
+  `GOOGLE_DRIVE_CLIENT_SECRET`, `GOOGLE_DRIVE_REFRESH_TOKEN`, `GOOGLE_DRIVE_FOLDER_ID`.
+- `platino-recd-admin-web`: `NEXT_PUBLIC_GOOGLE_CLIENT_ID` (same value as `GOOGLE_CLIENT_ID`).
+
+All of these are optional at the code level - every feature they gate degrades to a clear
+"not configured" state rather than erroring (§24.5), so the push/deploy above does not need to
+wait on them. Deliberately left blank for now per the business's own call; revisit later.
+
+**Immediate next step:** push, then verify the production URLs load and staff/customer login both
+work (the local smoke test in §24.7/§24.8 covered this against localhost + the Supabase DB
+directly - production has not yet been checked end-to-end against the deployed Vercel functions).
