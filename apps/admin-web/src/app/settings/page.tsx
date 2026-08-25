@@ -15,8 +15,61 @@ import {
 } from "@/lib/settingsStore";
 import { extractDominantColors, colorsToTheme } from "@/lib/colorExtractor";
 import { api } from "@/lib/apiClient";
+import AgentProvidersSettings from "@/components/AgentProvidersSettings";
+import AgentVisibilitySettings from "@/components/AgentVisibilitySettings";
+
+interface CompanyLetterhead {
+  legalName: string;
+  address: string;
+  city: string;
+  pinCode: string;
+  email: string;
+  website: string;
+  phone: string;
+  documentFooterNote: string;
+}
+
+const EMPTY_LETTERHEAD: CompanyLetterhead = {
+  legalName: "", address: "", city: "", pinCode: "", email: "", website: "", phone: "", documentFooterNote: "",
+};
 
 export default function SettingsPage() {
+  // Company letterhead (printed on every DataTable print view)
+  const [company, setCompany] = useState<CompanyLetterhead>(EMPTY_LETTERHEAD);
+  const [companyLoaded, setCompanyLoaded] = useState(false);
+  const [companySaving, setCompanySaving] = useState(false);
+
+  useEffect(() => {
+    api<Partial<CompanyLetterhead>>("/settings")
+      .then((s) => {
+        setCompany({
+          legalName: s.legalName ?? "",
+          address: s.address ?? "",
+          city: s.city ?? "",
+          pinCode: s.pinCode ?? "",
+          email: s.email ?? "",
+          website: s.website ?? "",
+          phone: s.phone ?? "",
+          documentFooterNote: s.documentFooterNote ?? "",
+        });
+        setCompanyLoaded(true);
+      })
+      .catch(() => setCompanyLoaded(true));
+  }, []);
+
+  async function saveCompany(e: React.FormEvent) {
+    e.preventDefault();
+    setCompanySaving(true);
+    try {
+      await api("/settings", { method: "PUT", body: JSON.stringify(company) });
+      alert("Letterhead saved.");
+    } catch (err) {
+      alert("Failed to save letterhead: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setCompanySaving(false);
+    }
+  }
+
   const [activeTheme, setActiveTheme] = useState("slate");
   const [customColors, setCustomColors] = useState<ThemeColors | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -375,6 +428,64 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+
+      {/* ── Company letterhead ────────────────────────────────────────────
+          Printed at the top of every DataTable "Print" view. The upstream
+          fork also carries GST/PAN/bank/terms/signatory fields here for its
+          invoice and quotation documents - not ported (see HANDOVER.md §24). */}
+      {companyLoaded && (
+        <section className="card p-4 sm:p-6">
+          <h2 className="text-base sm:text-lg font-semibold mb-1">Company letterhead</h2>
+          <p className="text-sm text-gray-500 mb-5">
+            Printed as the header and footer of every printed list (Sites, Customers, Products, Orders and so on).
+          </p>
+          <form onSubmit={saveCompany} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Legal name" value={company.legalName} onChange={(v) => setCompany((c) => ({ ...c, legalName: v }))} />
+              <Field label="Phone" value={company.phone} onChange={(v) => setCompany((c) => ({ ...c, phone: v }))} />
+              <Field label="Address" value={company.address} onChange={(v) => setCompany((c) => ({ ...c, address: v }))} />
+              <Field label="City" value={company.city} onChange={(v) => setCompany((c) => ({ ...c, city: v }))} />
+              <Field label="PIN code" value={company.pinCode} onChange={(v) => setCompany((c) => ({ ...c, pinCode: v }))} />
+              <Field label="Email" value={company.email} onChange={(v) => setCompany((c) => ({ ...c, email: v }))} />
+              <Field label="Website" value={company.website} onChange={(v) => setCompany((c) => ({ ...c, website: v }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Printed footer note</label>
+              <textarea
+                value={company.documentFooterNote}
+                onChange={(e) => setCompany((c) => ({ ...c, documentFooterNote: e.target.value }))}
+                rows={2}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={companySaving}
+              className="rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              style={{ backgroundColor: "var(--theme-primary)" }}
+            >
+              {companySaving ? "Saving…" : "Save letterhead"}
+            </button>
+          </form>
+        </section>
+      )}
+
+      <AgentVisibilitySettings />
+      <AgentProvidersSettings />
+    </div>
+  );
+}
+
+function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+      />
     </div>
   );
 }

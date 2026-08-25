@@ -35,6 +35,15 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
   const role = await prisma.role.findUnique({ where: { key: parsed.data.roleKey } });
   if (!role) return res.status(400).json({ error: `Unknown role key: ${parsed.data.roleKey}` });
 
+  // Customer logins must be created as a contact on a Customer record (POST /customers or
+  // /customers/:id/contacts), which sets User.customerId - the field every customer-scoped
+  // route/check keys off (including the RECD-serial + phone + OTP login). Creating a "customer"-role
+  // user through this generic staff-add-user form leaves customerId null, producing an account
+  // that can never actually log in as a customer.
+  if (parsed.data.roleKey === ROLE_KEY.CUSTOMER) {
+    return res.status(400).json({ error: "Customer accounts can't be created here - add them as a contact on the customer's record instead." });
+  }
+
   // Erection engineers are subcontracted: they must belong to an approved vendor.
   if (parsed.data.roleKey === ROLE_KEY.ERECTION_ENGINEER && !parsed.data.vendorId) {
     return res.status(400).json({ error: "An erection engineer must be assigned to a vendor" });
@@ -112,6 +121,11 @@ usersRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (r
   if (parsed.data.title !== undefined) data.title = parsed.data.title;
 
   if (parsed.data.roleKey !== undefined) {
+    // Same reasoning as the create route above: switching an existing staff/vendor user to
+    // "customer" here would leave customerId null, same broken-login outcome.
+    if (parsed.data.roleKey === ROLE_KEY.CUSTOMER && existing.role.key !== ROLE_KEY.CUSTOMER) {
+      return res.status(400).json({ error: "Can't change a user to the customer role here - add them as a contact on the customer's record instead." });
+    }
     const role = await prisma.role.findUnique({ where: { key: parsed.data.roleKey } });
     if (!role) return res.status(400).json({ error: `Unknown role key: ${parsed.data.roleKey}` });
     data.roleId = role.id;

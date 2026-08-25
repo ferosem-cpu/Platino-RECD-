@@ -49,7 +49,7 @@ export default function BottomNav({ onProfileClick }: BottomNavProps) {
   const visibleTabs = TABS.filter((tab) => hasPermission(tab.permission));
 
   return (
-    <nav data-testid="bottom-nav" className="bottom-nav lg:hidden" aria-label="Primary">
+    <nav data-testid="bottom-nav" className="bottom-nav lg:hidden print:hidden" aria-label="Primary">
       {visibleTabs.map((tab) => {
         const active = pathname === tab.href || pathname?.startsWith(tab.href + "/");
         return (

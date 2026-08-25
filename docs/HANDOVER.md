@@ -337,3 +337,292 @@ Implements a batch of UI/workflow changes supplied as a PPTX (`Platino RECD trak
 **Verified live in production:** `tsc --noEmit` clean on `apps/api` and `apps/admin-web`, `npm run build` clean on both `packages/shared` and `apps/admin-web` (new column visible in the `/amc-orders` build output size). Chrome extension was unreachable at verification time, so confirmed via a direct authenticated API call instead (`POST /auth/login` → `GET /amc-orders`) - the existing production AMC order (Sundaram Textiles, PO `PL-09867123`) correctly returns `"amcType": "camc"`. Not click-tested in the browser UI itself - do that (create a new order with NAMC selected, confirm the column renders) next time the extension is available.
 
 **Incidental observation, not part of this change:** the same API call showed `expiryReminderClearedAt` is now set on that order (2026-07-21) - someone used the "AMC Acquired" button for real since §22 was verified, which is the feature working as intended in the wild.
+
+## 24. Port of the Zan-APP fork's non-finance features (2026-08-25, branch `feature/port-zan-app-nonfinance`)
+
+**What this is.** `D:\Projects\Zan-APP` is a fork of this same codebase that diverged at commit
+`4dfc088` and added 110 commits, the largest of which is a full finance module (quotations,
+invoices, purchase orders, bills, expenses, work orders). This section records a port of
+**everything in that fork except the finance module** into this repo, which had meanwhile added
+8 commits of its own (the AMC Order module, RECD serial rename, company details, complaint
+overhaul - §20-§23). Those 8 are untouched.
+
+**Fork point verification.** `git log --format=%H` in both repos, sorted and `comm -12`'d, gives
+41 shared commits, the newest of which is `4dfc088`. Claude code has 8 unique commits, Zan-APP
+has 110. An earlier guess of `d5fa175` as the fork point was wrong; do not reuse it.
+
+**Method.** Not a cherry-pick replay - finance is threaded through most of those 110 commits, and
+several files (schema, shared contracts, complaints, auth, Nav, AuthGuard) had diverged on both
+sides. Instead: for self-contained new files, the fork's **HEAD state** was copied and adapted;
+for files this repo had also changed, the fork-point-to-HEAD diff was applied with `git apply
+--3way` and the conflicts resolved by hand (they were all additive - both sides adding different
+routes/fields to the same file). Four commits on the branch, one per layer.
+
+### 24.1 What was ported
+
+**Schema** (migration `20260825120000_port_zan_nonfinance`)
+- `OrderLineItem` - extra RECD units on one order/site (multi-RECD per site).
+- `SiteContact` - several POCs per site.
+- `DocumentRequirementType` + `SiteDocumentRequirement` - police verification / ESIC / insurance
+  / PPE, as a seeded lookup table (data-not-code, seeded by `seedDocumentRequirementTypes()`).
+- `RecdDelivery` - per-site material delivery status, priority and dates.
+- `AgentLlmProvider`, `AgentConversation` - in-app agent.
+- `Product`: `shape`, `dimensions`, `weightKg`, `silencerType`.
+- `Vendor`: `archivedById`, `archivedAt` (+ `VENDOR_STATUS.ARCHIVED`).
+- `Site`: the four Google Drive folder id/url fields.
+- `Order.value` and `Order.orderDate` become **nullable** - operationally-created orders don't
+  always have commercial figures yet. `createOrderSchema` follows.
+- `CompanySettings`: letterhead identity (`legalName`, `address`, `city`, `pinCode`, `email`,
+  `website`, `phone`, `documentFooterNote`) plus `agentVisibleRoleKeys` and
+  `agentCustomInstructions`.
+- New tables get `ENABLE ROW LEVEL SECURITY` with zero policies, matching every other table's
+  posture here (§20's RLS note).
+
+**API**
+- `lib/`: `crypto.ts` (AES-256-GCM, for the agent's stored provider API keys), `email.ts` (real
+  SMTP via nodemailer), `googleAuth.ts` (Google ID-token verification), `googleDrive.ts` (company
+  Drive client + folder creation), `docExtract.ts` (PDF/DOCX/text extraction).
+- **Email actually sends now.** `EmailProvider` used to `console.log` and return `true`; it now
+  renders copy from the new `emailTemplates.ts` and sends over SMTP, returning `false` (never
+  throwing) if SMTP is unconfigured or the recipient has no address. This closes the "Email is a
+  console stub" gap in §8. Stage-update emails to customers now carry order number, site name,
+  address and RECD units; vendor engineers are emailed when a site is assigned to their vendor.
+- **In-app agent**: multi-provider LLM chat (Anthropic + OpenAI-compatible adapters with priority
+  ordering and failover), Google Drive document search/read tools, read-only application data
+  tools, persisted conversations, a provider-config route gated on `manage_settings`, and a daily
+  cleanup cron deleting conversations older than 30 days.
+- **Routes**: products CRUD; customer detail/update/delete; order detail, line-item add/remove and
+  order deletion; site location, details, contacts, document requirements, RECD delivery, Drive
+  folder creation and clone-order; vendor archiving (with optional site reassignment) and
+  staff-added pre-approved vendors; `POST /auth/google`.
+- **Correctness fixes**: creating or switching a user to the `customer` role via the generic Users
+  page is now rejected (it leaves `customerId` null, producing an account that can never log in).
+
+**Admin web**
+- Shared `DataTable` component: column show/hide, per-column filters, CSV export, and
+  print-with-letterhead on a landscape named page. Rolled out to Sites, Customers, Products,
+  Orders, Users and Vendors.
+- New pages: Customers (list + detail), Products (list + detail), Order detail, and Reports
+  (SITC status, customer history, vendor performance).
+- Site detail page gains site details, contacts, document requirements, RECD delivery, Drive
+  folders, location capture with Google Maps, and "add another RECD unit" (same order, or a
+  separate sibling order+site).
+- Agent chat bubble (markdown rendering, copy button, mic input, maximize toggle, in-app links
+  that navigate client-side), plus agent visibility and provider settings on the Settings page.
+- Settings gains a **Company letterhead** section feeding the DataTable print header/footer.
+- `apiClient` no longer calls `res.json()` on a 204 - every delete button used to report a false
+  failure ("Unexpected end of JSON input") despite succeeding.
+
+### 24.2 What was deliberately excluded, and why
+
+- **The entire finance module**: Quotation, Invoice, PurchaseOrder, Bill, PaymentReceived,
+  PaymentMade, Expense, ExpenseCategory, Supplier, DocumentSequence, SavedLineItem,
+  CustomerProductPrice, CustomerSavedItemPrice, WorkOrder, WorkOrderProduct - plus their routes,
+  services (`documentNumber.ts`, `taxCalc.ts`), pages, print layouts, and the whole
+  invoice/quotation/PO print-redesign chain. Out of scope by requirement.
+- **Finance-adjacent fields on shared models**: `Customer.gstin`/`state`/`billingAddress`,
+  `Order.customerPoNumber`/`customerPoDate`, and `CompanySettings`' bank / GST / PAN / terms /
+  default-tax-rate / authorised-signatory fields. All were introduced by the finance commit
+  (`8f20c5e`) and exist only to be printed on money documents. The letterhead subset that the
+  DataTable print view genuinely needs was ported; nothing else.
+- **Work Orders** - a finance-module concept per the fork's own `FINANCE_MODULE_PLAN.md`, so its
+  permissions (`manage_work_orders`, `act_assigned_work_orders`) were not added either.
+- **The customer email+OTP login rewrite** (`d6140de`, `73acebf`, `0ac4eac`). See §24.3.
+- **The agent's write tools** (`create_expense` / `create_quotation` / `create_invoice` /
+  `create_purchase_order` / `create_saved_item`) and the `AgentPendingAction` confirm-gate table,
+  its confirm/reject routes, and the chat bubble's confirm card. Four of the five tools are
+  finance; the fifth (`create_complaint`) was dropped too, for two reasons: it depends on that
+  same confirm-gate infrastructure, and **this app's complaint form makes a nameplate photo
+  mandatory** (§20's `attachmentUrl`), which an agent turn cannot supply. **The ported agent is
+  therefore strictly read-only**, and its system prompt tells customers to use the portal's own
+  complaint form. If write tools are ever wanted here, `AgentPendingAction` has to come back first.
+- **Zan-APP's Vercel/Prisma deploy config** (`c8e0edb`, `52aa901`) - this repo's own topology (§9)
+  is working and was not touched. The agent cleanup cron is registered as a route but **no `crons`
+  entry was added to `apps/api/vercel.json`**; add one (and reuse the existing `CRON_SECRET` from
+  §22) if the 30-day cleanup should actually run.
+- **Zan-F rebranding** - `themes.ts`, the vendor-register copy, the layout description and the
+  customer portal's "Support Owner" line all stay Platino. The email template's brand string is
+  now `process.env.EMAIL_BRAND_NAME || "Platino"` rather than hardcoded.
+- **The dev-port change** (6001 → 6011) - this repo stays on 6001 per §12.
+- **All docs-only commits**, including the fork's own handover and its compaction (`b56bbc4`).
+  Of the 15 commits flagged "check each", 14 touch only `docs/HANDOVER.md`; the fifteenth
+  (`5f681e1`) also adds `apps/api/scripts/getDriveRefreshToken.js`, which **was** ported (with
+  the Zan-specific account name genericized) since it is how a `GOOGLE_DRIVE_REFRESH_TOKEN` gets
+  minted. The fork's `scripts/verify*.ts` throwaways were not ported.
+- **No runtime data crossed over.** No `.env`, no database contents, no seeded values. The only
+  seed addition is the four generic document-requirement-type rows.
+
+### 24.3 Customer login — unchanged, and how that was verified
+
+Customer login here remains **RECD Serial Number + phone number + email-delivered OTP**
+(`/auth/customer/register` → `/auth/customer/verify`, Customer tab on the login page). The fork
+replaced this with email-only OTP; that change was not applied.
+
+Two guards were added on top rather than relying on care alone:
+- `POST /auth/google` **rejects any account with a `customerId` or the `customer` role**, so the
+  new Google path cannot become a back-door customer login. The Google button renders only inside
+  the Staff tab.
+- Both files were snapshotted before the port and diffed after. In
+  `apps/admin-web/src/app/login/page.tsx` and `apps/api/src/routes/auth.ts`, the **only removed
+  line in each is the import statement** (widened to pull in `googleLoginSchema` / `ROLE_KEY`).
+  Every line of the customer register/verify flow is byte-identical.
+
+One behavioural note that is *not* a login change: because `EmailProvider` now really sends,
+customer OTP emails will actually be delivered in production instead of only appearing in the
+server log. The route's own logic is untouched - the notification call is still wrapped in
+try/catch, the code is still logged server-side, and `devCode` is still echoed outside production.
+
+### 24.4 Integration decisions and conflicts worth knowing
+
+- **`Site.companyName` means two things now.** This repo added it in §20 as the Company Name the
+  customer types into the portal's Company Details form; the fork added the same column name as
+  the end-client / site-owner "Site name" surfaced across sites and orders. They are the same
+  field and were merged rather than duplicated - the doc comment on the model says so. If these
+  ever need to be distinct, that is a new column, not a rename.
+- **The Complaints page kept its own layout.** The fork's `69ac88d` rolls DataTable out to
+  Complaints too, but this repo's Complaints page was substantially rebuilt in §20 (issue
+  category, mandatory attachment, status tiles, reject/delete, remarks + service report). Merging
+  the DataTable rollout into it risked regressing that, so Complaints keeps its current table.
+  Everything else in the rollout was applied.
+- **The complaints route refactor was skipped.** The fork extracts `createComplaintRecord` /
+  `assertOwnSite` out of `POST /complaints` purely so the agent's `create_complaint` write tool
+  can share them. With that tool excluded, the refactor has no caller, and applying it would have
+  conflicted with §20's one-open-complaint-per-serial rule and mandatory-attachment validation.
+- **Order deletion is less restrictive here.** Upstream it refuses to delete an order that has
+  invoices, converted quotations, purchase orders or expenses attached. None of those exist here,
+  so only the complaint check remains.
+- **`lib/finance.ts` was not ported.** Its two generic helpers (`formatINR`, `formatDate`) live in
+  a new `apps/admin-web/src/lib/format.ts`; the invoice/PO status labels and the number-to-words
+  helper were left behind.
+- **Print CSS was pruned.** The fork's `globals.css` carries a full invoice layout (bill-to
+  panels, totals summary, bank block, amount-in-words, signature). Only the classes the shared
+  DataTable print view actually uses were kept.
+- **New dependencies**: `@anthropic-ai/sdk`, `openai`, `googleapis`, `google-auth-library`,
+  `nodemailer` (+ `@types/nodemailer`), `mammoth`, `pdf-parse` on the API; `react-markdown` and
+  `remark-gfm` on admin-web. `pdf-parse` is **imported lazily inside `extractText()`** - importing
+  it eagerly crashed the entire Vercel function at require-time (`ReferenceError: DOMMatrix is not
+  defined`), taking down `/health` along with everything else. Do not hoist that import.
+
+### 24.5 New environment variables (all optional; each feature degrades to "not configured")
+
+| Var | Used by |
+|---|---|
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `EMAIL_FROM_ADDRESS` | real email delivery (`lib/email.ts`) |
+| `EMAIL_BRAND_NAME` | brand string in outbound email subjects/headers (defaults to `Platino`) |
+| `AGENT_SECRETS_KEY` | base64 32-byte key encrypting stored agent provider API keys |
+| `GOOGLE_CLIENT_ID` / `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | staff "Sign in with Google" |
+| `GOOGLE_DRIVE_CLIENT_ID` / `_CLIENT_SECRET` / `_REFRESH_TOKEN` / `_FOLDER_ID` | agent Drive search + site Drive folders |
+| `CRON_SECRET` | already exists (§22); also guards the agent conversation cleanup route |
+
+Nothing here is set yet. Until `AGENT_SECRETS_KEY` exists the agent provider routes throw a clear
+error; until the Drive vars exist the Drive tools return a "not configured" message; until SMTP
+exists email logs an error and reports the notification undelivered.
+
+### 24.6 Verification
+
+- `npm run build --workspace=packages/shared` - clean.
+- `apps/api` `tsc --noEmit` - clean.
+- `apps/admin-web` `tsc --noEmit` - clean; `next build` - clean, all 22 routes emitted
+  (including the new `/customers`, `/customers/[id]`, `/products`, `/products/[id]`,
+  `/orders/[id]`, `/reports`, `/reports/sitc`, `/reports/customer-history`,
+  `/reports/vendor-performance`).
+- `npx prisma validate` - schema valid; `prisma generate` regenerates cleanly.
+- Customer login diffed against its pre-port snapshot (see §24.3).
+- Repo-wide grep for `Zan-F` / `Zan-APP` / `zanApp` / `zanf` / personal email addresses - no hits.
+
+### 24.7 Migration applied + click-tested (2026-08-25)
+
+The migration was applied to `platino-recd-mumbai` (`qpysyuysgcsrpvlxdglk`) via Supabase MCP
+`apply_migration`, the four `DocumentRequirementType` rows were seeded, and the customer login
+flow was click-tested end-to-end in a real browser against the live DB (not just typecheck).
+
+**One real conflict, fixed.** The first `apply_migration` attempt failed:
+`column "pinCode" of relation "CompanySettings" already exists`. Postgres DDL is transactional, so
+the whole batch rolled back cleanly (confirmed via `list_tables` before retrying - none of the new
+tables existed yet). Investigation found `CompanySettings.pinCode` was already on the live DB from
+an **untracked-in-git** migration (`_prisma_migrations` shows `20260721120000_add_header_footer_settings`,
+applied 2026-07-21, with no corresponding folder anywhere in this repo's history) - same shape
+(`TEXT`, nullable) the port needed, so the migration file was edited to drop that one line and
+reuse the existing column instead of re-adding it (commit `3a257fb`, after the branch's original
+`7742f15`). Re-applied clean; the new migration was also recorded in `_prisma_migrations` by hand
+(the Supabase MCP tool runs raw SQL, it doesn't touch Prisma's own tracking table).
+
+**A second, unrelated drift surfaced while investigating the above, not fixed:**
+`_prisma_migrations` only has 4 rows (`init`, `add_auth_and_settings`, `add_vendors`,
+`add_header_footer_settings`) even though the live schema actually reflects migrations through
+§23 (`add_amc_type`) - the three AMC-era migrations were applied to the schema without ever being
+recorded in that table. This predates this port and wasn't touched, but `prisma migrate deploy`
+will be confused by it (it'll see `add_amc_orders_...`, `add_amc_expiry_reminder_fields` and
+`add_amc_type` as "not yet applied" and try to re-run DDL that's already there) until someone
+reconciles the table - either backfill the three missing rows, or `prisma migrate resolve
+--applied` each one.
+
+**Security advisors** after the migration: only the same `rls_enabled_no_policy` INFO-level notice
+every other table in this DB already has (RLS on, zero policies, default-deny to the anon key,
+Prisma's own connection bypasses it) - nothing new.
+
+**Click-test:** Customer tab → `ORD-2026-0001` / `+919900011122` → dev-mode OTP shown on-screen
+(SMTP unset, so `EmailProvider` degraded to its console/dev-mode path exactly as designed, did not
+throw) → verified → **full customer portal rendered**: order status, SITC milestone timeline with
+history, the Company Details form, the complaint form, and three seeded support tickets. Confirmed
+via the JWT payload that the session really is `roleKey: "customer"`, not a staff account.
+
+One more pre-existing data anomaly found and fixed along the way: the seeded customer contact
+(`cmqneogms001j8hnxentpqt7t`, "Suresh Sundaram") had `mustChangePassword: true` on the live row,
+even though `seed.ts` has always explicitly set that to `false` for this user (customers
+authenticate via OTP, not a password, so the flag is meaningless for them but `AuthGuard` still
+redirects on it regardless of role). Corrected directly via SQL to match what `seed.ts` intends;
+not a port-introduced bug, and not chased further since the login/portal flow it was blocking is
+now confirmed working.
+
+**Minor naming leftover spotted, not fixed:** `apps/admin-web/src/components/DataTable.tsx` keys
+its column-visibility `localStorage` entries as `zan-app:columns:${storageKey}`. Cosmetic (a stale
+prefix from the fork, doesn't leak anything, doesn't collide with anything else in this app), but
+worth renaming to `recd:columns:...` next time that file is touched.
+
+**Still not verified:** the in-app agent (needs `AGENT_SECRETS_KEY` + an LLM provider configured
+first), Google sign-in (`GOOGLE_CLIENT_ID`), Drive integration, and real SMTP delivery - all
+correctly degrade to "not configured" rather than erroring, per §24.5, but none has been exercised
+with real credentials yet.
+
+### 24.8 Remaining pages click-tested (2026-08-25, staff/Super Admin)
+
+Customers, Products, Orders (list + detail, including the Google Maps link and "Sites for this
+customer" panel), Reports (`/reports` index correctly shows only the three non-finance reports;
+`/reports/sitc` runs and returns the seeded site), and Vendors (list renders status/engineer/site
+counts and the "Archive" action on approved vendors - not clicked, since archiving a real vendor
+row wasn't necessary just to confirm the button renders) - all load without console errors and
+against real API responses (checked via `read_network_requests`, not just the rendered text).
+
+Two apparent "empty" renders (`Orders` briefly showing "No orders yet.", `/reports/sitc` briefly
+showing "No sites match these filters.") were both just React's first paint racing the API
+response, not bugs - re-reading the page a moment later showed the row in both cases, and the
+network tab confirmed the API had already returned the data correctly.
+
+**Found, not fixed - pre-existing data, not introduced by this port:** the live
+`platino-recd-mumbai` database already has a vendor literally named **"Zan-F vendor"**
+(contact "Omar", `ferosem@gmail.com`), created 2026-07-06 - before this session touched anything.
+This port never wrote to the `Vendor` table. Worth cleaning up since it's a name/personal-email
+leftover sitting in production data, but that's a data decision for the business owner, not
+something to silently delete.
+
+### 24.9 Migration log reconciled + test vendor removed (2026-08-25)
+
+Both closed same-day, since all data in this database is confirmed test data (nothing to preserve):
+
+- **`_prisma_migrations` drift (§24.7) fixed.** `npx prisma migrate resolve --applied` run for
+  each of the three untracked AMC migrations (`add_amc_orders_company_details_complaint_fields`,
+  `add_amc_expiry_reminder_fields`, `add_amc_type`) - this only writes a "done" row per migration
+  into Prisma's own log table, it does not touch any schema or data. `npx prisma migrate status`
+  now reports **"Database schema is up to date!"**. `prisma migrate deploy` is safe to run here
+  going forward.
+- **"Zan-F vendor" row (§24.8) deleted.** Confirmed zero dependent `User`/`Site` rows first
+  (`vendorId` count was 0/0), then removed. Vendor list is now the four vendors from this repo's
+  own seed/testing: Salem Fabrication Works, Coimbatore Erectors LLP, Test Erectors
+  1782803442496, UI Test Erectors 1782814602566.
+
+**Follow-ups if this branch is merged:**
+1. Set whichever env vars from §24.5 the business actually wants live (SMTP first, most valuable).
+2. Add a `crons` entry for `GET /agent/cron/cleanup-conversations` if agent history should expire.
+3. Rename the `DataTable.tsx` `localStorage` key prefix from `zan-app:` to `recd:` (§24.7,
+   cosmetic, not urgent).

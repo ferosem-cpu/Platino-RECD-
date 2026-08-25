@@ -28,14 +28,43 @@ export const customerVerifySchema = z.object({
   code: z.string().length(6),
 });
 
+/**
+ * "Sign in with Google" for staff (Super Admin etc). This is an *additional* staff login
+ * path alongside email+password - it does not touch the customer login flow, which stays
+ * RECD Serial Number + phone + emailed OTP (customerRegisterSchema/customerVerifySchema).
+ */
+export const googleLoginSchema = z.object({
+  /** The ID token returned by Google Identity Services' credential callback (a signed JWT). */
+  credential: z.string().min(1),
+});
+
 export const createOrderSchema = z.object({
   customerId: z.string(),
   productId: z.string(),
   quantity: z.number().int().positive(),
-  value: z.number().nonnegative(),
-  orderDate: z.string().datetime(),
+  // Optional: a sales-created order should still set these, but they're nullable on the
+  // model to support operational orders created without commercial figures yet (e.g. a
+  // site added before pricing is finalized).
+  value: z.number().nonnegative().optional(),
+  orderDate: z.string().datetime().optional(),
   promisedDeliveryDate: z.string().datetime().optional(),
   plannedExhaustHookupType: z.string().optional(),
+});
+
+/** Adds another RECD product to an existing order/site (same order, multiple units). */
+export const addOrderLineItemSchema = z.object({
+  productId: z.string(),
+  quantity: z.number().int().positive(),
+});
+
+/**
+ * Creates a sibling Order+Site for another RECD delivered to the same physical location -
+ * same address/companyName/vendor as the source site, reset to the first stage, but its
+ * own orderNumber so it's tracked independently.
+ */
+export const cloneOrderForSiteSchema = z.object({
+  productId: z.string(),
+  quantity: z.number().int().positive(),
 });
 
 export const createStageEventSchema = z.object({
@@ -54,6 +83,50 @@ export const uploadSitePhotoSchema = z.object({
   checkpointId: z.string(),
   photoUrl: z.string().url(),
   caption: z.string().optional(),
+});
+
+export const updateSiteLocationSchema = z.object({
+  address: z.string().optional(),
+  gpsLat: z.number().min(-90).max(90).nullable().optional(),
+  gpsLng: z.number().min(-180).max(180).nullable().optional(),
+});
+
+/** Site's own identity fields - end-client/site-owner name and address, editable independent of location capture. */
+export const updateSiteDetailsSchema = z.object({
+  companyName: z.string().nullable().optional(),
+  address: z.string().nullable().optional(),
+});
+
+export const createSiteContactSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  phone: z.string().optional(),
+  email: z.string().email().optional(),
+  role: z.string().optional(),
+});
+
+export const updateSiteContactSchema = createSiteContactSchema.partial();
+
+/** Bulk-set all document requirements for a site in one call (the UI presents them as a table). */
+export const setSiteDocumentRequirementsSchema = z.object({
+  requirements: z.array(
+    z.object({
+      requirementTypeId: z.string(),
+      required: z.boolean(),
+      status: z.string().optional(),
+      documentUrl: z.string().url().optional(),
+      notes: z.string().optional(),
+    }),
+  ),
+});
+
+export const upsertRecdDeliverySchema = z.object({
+  productId: z.string().nullable().optional(),
+  quantity: z.number().int().positive().nullable().optional(),
+  deliveryStatus: z.string().optional(),
+  statusNote: z.string().nullable().optional(),
+  priority: z.number().int().nullable().optional(),
+  expectedDate: z.string().datetime().nullable().optional(),
+  actualDate: z.string().datetime().nullable().optional(),
 });
 
 export const createComplaintSchema = z.object({
@@ -132,6 +205,28 @@ export const createCustomerSchema = z.object({
   contactEmail: z.string().email().optional(),
 });
 
+export const updateCustomerSchema = z.object({
+  name: z.string().min(1).optional(),
+  address: z.string().optional(),
+  contactName: z.string().min(1).optional(),
+  contactPhone: z.string().min(6).optional(),
+  contactEmail: z.string().email().optional(),
+});
+
+export const createProductSchema = z.object({
+  name: z.string().min(1),
+  model: z.string().min(1),
+  ratingSpec: z.string().optional(),
+  capacityKva: z.number().optional(),
+  warrantyMonths: z.number().int().optional(),
+  shape: z.enum(["cylinder", "triangle", "rectangle"]).optional(),
+  dimensions: z.string().optional(),
+  weightKg: z.number().optional(),
+  silencerType: z.union([z.literal(1), z.literal(2)]).optional(),
+});
+
+export const updateProductSchema = createProductSchema.partial();
+
 export const registerVendorSchema = z.object({
   name: z.string().min(1),
   contactName: z.string().min(1),
@@ -139,6 +234,13 @@ export const registerVendorSchema = z.object({
   contactEmail: z.string().email(),
   contactPhone: z.string().optional(),
   address: z.string().optional(),
+});
+
+/** Optional: move this vendor's currently-assigned sites to another approved vendor before
+ * archiving, so ongoing erection work doesn't stall. Omit to leave sites pointed at the
+ * archived vendor (fine for work that's already finished). */
+export const archiveVendorSchema = z.object({
+  reassignSitesToVendorId: z.string().optional(),
 });
 
 /** Assign (or clear) the external vendor responsible for a site, and optionally its engineer. */

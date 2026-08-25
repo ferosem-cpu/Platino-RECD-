@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 
@@ -13,11 +13,56 @@ interface Lookup {
   sequenceOrder?: number;
 }
 
+interface SiteContact {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  role: string | null;
+}
+
+interface SiteDocumentRequirement {
+  id: string;
+  requirementTypeId: string;
+  requirementType: { id: string; key: string; label: string };
+  required: boolean;
+  status: string;
+  documentUrl: string | null;
+  notes: string | null;
+}
+
+interface RecdDelivery {
+  id: string;
+  productId: string | null;
+  product: { id: string; name: string; model: string } | null;
+  quantity: number | null;
+  deliveryStatus: string;
+  statusNote: string | null;
+  priority: number | null;
+  expectedDate: string | null;
+  actualDate: string | null;
+}
+
 interface SiteDetail {
   id: string;
   address: string | null;
+  companyName: string | null;
+  gpsLat: string | null;
+  gpsLng: string | null;
   confirmedExhaustHookupType: string | null;
-  order: { orderNumber: string; plannedExhaustHookupType: string | null; customer: { name: string } };
+  photosDriveFolderId: string | null;
+  photosDriveFolderUrl: string | null;
+  drawingsDriveFolderId: string | null;
+  drawingsDriveFolderUrl: string | null;
+  order: {
+    id: string;
+    orderNumber: string;
+    plannedExhaustHookupType: string | null;
+    customer: { name: string };
+    quantity: number;
+    product: { id: string; name: string; model: string };
+    lineItems: Array<{ id: string; quantity: number; product: { id: string; name: string; model: string } }>;
+  };
   currentStage: { id: string; label: string; phase: string };
   assignedEngineer: { name: string } | null;
   vendor: { id: string; name: string } | null;
@@ -31,12 +76,27 @@ interface SiteDetail {
   }>;
   photos: Array<{ id: string; photoUrl: string; checkpoint: { label: string }; uploadedAt: string }>;
   pendingActions: Array<{ id: string; description: string; status: string; category: string }>;
+  contacts: SiteContact[];
+  documentRequirements: SiteDocumentRequirement[];
+  recdDelivery: RecdDelivery | null;
 }
+
+const DELIVERY_STATUS_OPTIONS = [
+  { value: "pending", label: "Pending" },
+  { value: "in_transit", label: "In transit" },
+  { value: "delivered", label: "Delivered" },
+];
 
 const EXHAUST_OPTIONS = [
   { value: "replace_existing_silencer", label: "Replace existing silencer with RECD" },
   { value: "add_after_existing_exhaust", label: "Add RECD after existing exhaust" },
 ];
+
+function mapsUrl(address: string | null, lat: string | null, lng: string | null): string | null {
+  if (lat && lng) return `https://www.google.com/maps?q=${lat},${lng}`;
+  if (address) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  return null;
+}
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -49,9 +109,11 @@ function fileToDataUrl(file: File): Promise<string> {
 
 export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { hasPermission } = useAuth();
   const canEdit = hasPermission("change_site_status");
   const canAssignVendor = hasPermission("manage_vendors");
+  const canManageOrders = hasPermission("manage_orders");
 
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<Lookup[]>([]);
@@ -74,9 +136,50 @@ export default function SiteDetailPage() {
   const [matchesPlan, setMatchesPlan] = useState(true);
   const [submittingExhaust, setSubmittingExhaust] = useState(false);
 
+  // Location
+  const [locAddress, setLocAddress] = useState("");
+  const [locLat, setLocLat] = useState("");
+  const [locLng, setLocLng] = useState("");
+  const [savingLocation, setSavingLocation] = useState(false);
+
   // Photos
   const [uploadingCheckpoint, setUploadingCheckpoint] = useState<string | null>(null);
   const photoInputRef = useRef<Record<string, HTMLInputElement | null>>({});
+
+  // Site details (company name / address, office-side editing)
+  const [companyName, setCompanyName] = useState("");
+  const [detailsAddress, setDetailsAddress] = useState("");
+  const [savingDetails, setSavingDetails] = useState(false);
+
+  // Contacts
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactRole, setContactRole] = useState("");
+  const [addingContact, setAddingContact] = useState(false);
+
+  // Document requirements
+  const [requirementTypes, setRequirementTypes] = useState<{ id: string; key: string; label: string }[]>([]);
+  const [requirementState, setRequirementState] = useState<Record<string, { required: boolean; status: string }>>({});
+  const [savingRequirements, setSavingRequirements] = useState(false);
+
+  // RECD delivery
+  const [products, setProducts] = useState<{ id: string; name: string; model: string }[]>([]);
+  const [deliveryProductId, setDeliveryProductId] = useState("");
+  const [deliveryQuantity, setDeliveryQuantity] = useState("1");
+  const [deliveryStatus, setDeliveryStatus] = useState("pending");
+  const [deliveryPriority, setDeliveryPriority] = useState("");
+  const [deliveryNote, setDeliveryNote] = useState("");
+  const [savingDelivery, setSavingDelivery] = useState(false);
+
+  // Add another unit (either onto this order, or as a fully separate order)
+  const [unitProductId, setUnitProductId] = useState("");
+  const [unitQuantity, setUnitQuantity] = useState("1");
+  const [unitMode, setUnitMode] = useState<"same_order" | "separate_order">("same_order");
+  const [addingUnit, setAddingUnit] = useState(false);
+  const [removingLineItemId, setRemovingLineItemId] = useState<string | null>(null);
+
+  // Drive folders
+  const [creatingDriveFolders, setCreatingDriveFolders] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -84,6 +187,25 @@ export default function SiteDetailPage() {
       setSite(detail);
       setStageId((prev) => prev || detail.currentStage.id);
       setAssignVendorId((prev) => prev || detail.vendor?.id || "");
+      setLocAddress((prev) => prev || detail.address || "");
+      setLocLat((prev) => prev || detail.gpsLat || "");
+      setLocLng((prev) => prev || detail.gpsLng || "");
+      setCompanyName((prev) => prev || detail.companyName || "");
+      setDetailsAddress((prev) => prev || detail.address || "");
+      setRequirementState((prev) =>
+        Object.keys(prev).length
+          ? prev
+          : Object.fromEntries(
+              detail.documentRequirements.map((r) => [r.requirementTypeId, { required: r.required, status: r.status }]),
+            ),
+      );
+      if (detail.recdDelivery) {
+        setDeliveryProductId((prev) => prev || detail.recdDelivery?.productId || "");
+        setDeliveryQuantity((prev) => (prev !== "1" ? prev : String(detail.recdDelivery?.quantity ?? 1)));
+        setDeliveryStatus((prev) => (prev !== "pending" ? prev : detail.recdDelivery?.deliveryStatus ?? "pending"));
+        setDeliveryPriority((prev) => prev || (detail.recdDelivery?.priority != null ? String(detail.recdDelivery.priority) : ""));
+        setDeliveryNote((prev) => prev || detail.recdDelivery?.statusNote || "");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load site");
     }
@@ -97,6 +219,8 @@ export default function SiteDetailPage() {
       if (opts.length) setStatusId((prev) => prev || opts[0].id);
     }).catch(() => {});
     api<Lookup[]>("/meta/photo-checkpoints").then(setCheckpoints).catch(() => {});
+    api<{ id: string; key: string; label: string }[]>("/meta/document-requirement-types").then(setRequirementTypes).catch(() => {});
+    api<{ id: string; name: string; model: string }[]>("/meta/products").then(setProducts).catch(() => {});
     if (canAssignVendor) api<{ id: string; name: string; status: string }[]>("/vendors").then(setVendors).catch(() => {});
   }, [load, canAssignVendor]);
 
@@ -121,6 +245,28 @@ export default function SiteDetailPage() {
       setError(err instanceof Error ? err.message : "Failed to post update");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function submitLocation(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingLocation(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/location`, {
+        method: "POST",
+        body: JSON.stringify({
+          address: locAddress || undefined,
+          gpsLat: locLat.trim() === "" ? null : parseFloat(locLat),
+          gpsLng: locLng.trim() === "" ? null : parseFloat(locLng),
+        }),
+      });
+      flash("Location updated.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update location");
+    } finally {
+      setSavingLocation(false);
     }
   }
 
@@ -182,13 +328,174 @@ export default function SiteDetailPage() {
     }
   }
 
+  async function submitSiteDetails(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingDetails(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ companyName: companyName || null, address: detailsAddress || null }),
+      });
+      flash("Site details updated.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update site details");
+    } finally {
+      setSavingDetails(false);
+    }
+  }
+
+  async function addContact(e: React.FormEvent) {
+    e.preventDefault();
+    if (!contactName.trim()) return;
+    setAddingContact(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/contacts`, {
+        method: "POST",
+        body: JSON.stringify({ name: contactName, phone: contactPhone || undefined, role: contactRole || undefined }),
+      });
+      setContactName("");
+      setContactPhone("");
+      setContactRole("");
+      flash("Contact added.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add contact");
+    } finally {
+      setAddingContact(false);
+    }
+  }
+
+  async function removeContact(contactId: string) {
+    setError(null);
+    try {
+      await api(`/sites/${id}/contacts/${contactId}`, { method: "DELETE" });
+      flash("Contact removed.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove contact");
+    }
+  }
+
+  async function saveDocumentRequirements(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingRequirements(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/document-requirements`, {
+        method: "PUT",
+        body: JSON.stringify({
+          requirements: requirementTypes.map((t) => ({
+            requirementTypeId: t.id,
+            required: requirementState[t.id]?.required ?? false,
+            status: requirementState[t.id]?.status || undefined,
+          })),
+        }),
+      });
+      flash("Document requirements saved.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save document requirements");
+    } finally {
+      setSavingRequirements(false);
+    }
+  }
+
+  async function saveDelivery(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingDelivery(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/recd-delivery`, {
+        method: "PUT",
+        body: JSON.stringify({
+          productId: deliveryProductId || null,
+          quantity: deliveryQuantity ? parseInt(deliveryQuantity, 10) : null,
+          deliveryStatus,
+          statusNote: deliveryNote || null,
+          priority: deliveryPriority ? parseInt(deliveryPriority, 10) : null,
+        }),
+      });
+      flash("RECD delivery updated.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update RECD delivery");
+    } finally {
+      setSavingDelivery(false);
+    }
+  }
+
+  async function addUnit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!site || !unitProductId) return;
+    setAddingUnit(true);
+    setError(null);
+    try {
+      const quantity = parseInt(unitQuantity, 10) || 1;
+      if (unitMode === "same_order") {
+        await api(`/orders/${site.order.id}/line-items`, {
+          method: "POST",
+          body: JSON.stringify({ productId: unitProductId, quantity }),
+        });
+        setUnitProductId("");
+        setUnitQuantity("1");
+        flash("Unit added to this order.");
+        await load();
+      } else {
+        const newOrder = await api<{ orderNumber: string; site: { id: string } }>(`/sites/${id}/clone-order`, {
+          method: "POST",
+          body: JSON.stringify({ productId: unitProductId, quantity }),
+        });
+        router.push(`/sites/${newOrder.site.id}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add unit");
+    } finally {
+      setAddingUnit(false);
+    }
+  }
+
+  async function removeLineItem(lineItemId: string) {
+    if (!site) return;
+    setRemovingLineItemId(lineItemId);
+    setError(null);
+    try {
+      await api(`/orders/${site.order.id}/line-items/${lineItemId}`, { method: "DELETE" });
+      flash("Unit removed.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove unit");
+    } finally {
+      setRemovingLineItemId(null);
+    }
+  }
+
+  async function createDriveFolders() {
+    setCreatingDriveFolders(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/drive-folders`, { method: "POST" });
+      flash("Drive folders created.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create Drive folders");
+    } finally {
+      setCreatingDriveFolders(false);
+    }
+  }
+
   if (error && !site) return <p className="text-sm text-red-600">{error}</p>;
   if (!site) return <p className="text-sm text-gray-500">Loading...</p>;
 
   return (
     <div className="space-y-6 max-w-4xl" data-testid="site-detail-page">
       <div>
-        <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{site.order.orderNumber}</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>
+          {site.companyName ?? "Unnamed site"}
+        </h1>
+        <p className="text-sm text-gray-500 font-mono text-xs">{site.order.orderNumber}</p>
         <p className="text-sm text-gray-500">
           {site.order.customer.name} · {site.address ?? "No address on file"}
         </p>
@@ -209,6 +516,369 @@ export default function SiteDetailPage() {
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">{banner}</div>
       )}
       {error && site && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
+
+      <section className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Location</h2>
+          {(() => {
+            const url = mapsUrl(site.address, site.gpsLat, site.gpsLng);
+            return url ? (
+              <a href={url} target="_blank" rel="noreferrer" className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                📍 View on Google Maps
+              </a>
+            ) : (
+              <span className="text-xs text-gray-400">No location set yet</span>
+            );
+          })()}
+        </div>
+        {canEdit ? (
+          <form onSubmit={submitLocation} className="space-y-2">
+            <textarea
+              placeholder="Site address"
+              rows={2}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={locAddress}
+              onChange={(e) => setLocAddress(e.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="number"
+                step="any"
+                placeholder="Latitude"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={locLat}
+                onChange={(e) => setLocLat(e.target.value)}
+              />
+              <input
+                type="number"
+                step="any"
+                placeholder="Longitude"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={locLng}
+                onChange={(e) => setLocLng(e.target.value)}
+              />
+            </div>
+            <p className="text-[11px] text-gray-400">Coordinates give the most accurate map pin - paste them from a phone&apos;s GPS if available. Address alone still works for the map link.</p>
+            <button type="submit" disabled={savingLocation} className="btn-primary px-4 py-2 text-sm">
+              {savingLocation ? "Saving…" : "Save location"}
+            </button>
+          </form>
+        ) : (
+          <p className="text-sm text-gray-500 whitespace-pre-line">{site.address ?? "No address on file"}</p>
+        )}
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold">Site name</h2>
+        <p className="text-xs text-gray-500">
+          The end-client / site-owner who actually operates this premises - distinct from{" "}
+          {site.order.customer.name}, who we&apos;re contracted with.
+        </p>
+        {canEdit ? (
+          <form onSubmit={submitSiteDetails} className="space-y-2">
+            <input
+              placeholder="Site name (e.g. BPCL)"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+            />
+            <textarea
+              placeholder="Site address"
+              rows={2}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={detailsAddress}
+              onChange={(e) => setDetailsAddress(e.target.value)}
+            />
+            <button type="submit" disabled={savingDetails} className="btn-primary px-4 py-2 text-sm">
+              {savingDetails ? "Saving…" : "Save site details"}
+            </button>
+          </form>
+        ) : (
+          <p className="text-sm text-gray-500">{site.companyName ?? "No end-client name on file"}</p>
+        )}
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold">Site contacts</h2>
+        <ul className="space-y-2">
+          {site.contacts.map((c) => (
+            <li key={c.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
+              <div>
+                <span className="font-medium">{c.name}</span>
+                {c.role && <span className="text-gray-500"> · {c.role}</span>}
+                {c.phone && <span className="text-gray-500"> · {c.phone}</span>}
+                {c.email && <span className="text-gray-500"> · {c.email}</span>}
+              </div>
+              {canEdit && (
+                <button type="button" onClick={() => removeContact(c.id)} className="text-xs text-red-600 hover:underline">
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+          {site.contacts.length === 0 && <p className="text-sm text-gray-400">No contacts added yet.</p>}
+        </ul>
+        {canEdit && (
+          <form onSubmit={addContact} className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <input
+              placeholder="Name"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={contactName}
+              onChange={(e) => setContactName(e.target.value)}
+            />
+            <input
+              placeholder="Phone"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={contactPhone}
+              onChange={(e) => setContactPhone(e.target.value)}
+            />
+            <input
+              placeholder="Role (e.g. Security head)"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={contactRole}
+              onChange={(e) => setContactRole(e.target.value)}
+            />
+            <button type="submit" disabled={addingContact} className="btn-primary px-4 py-2 text-sm sm:col-span-3">
+              {addingContact ? "Adding…" : "+ Add contact"}
+            </button>
+          </form>
+        )}
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold">Document requirements</h2>
+        <p className="text-xs text-gray-500">
+          Safety/entry documents this site&apos;s end-client requires, e.g. police verification, ESIC, insurance, PPE kits.
+        </p>
+        {requirementTypes.length === 0 ? (
+          <p className="text-sm text-gray-400">No requirement types configured yet.</p>
+        ) : (
+          <form onSubmit={saveDocumentRequirements} className="space-y-2">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500">
+                  <th className="py-1">Requirement</th>
+                  <th className="py-1">Required</th>
+                  <th className="py-1">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requirementTypes.map((t) => {
+                  const state = requirementState[t.id] ?? { required: false, status: "not_submitted" };
+                  return (
+                    <tr key={t.id} className="border-t border-gray-100">
+                      <td className="py-2">{t.label}</td>
+                      <td className="py-2">
+                        <input
+                          type="checkbox"
+                          checked={state.required}
+                          disabled={!canEdit}
+                          onChange={(e) =>
+                            setRequirementState((prev) => ({ ...prev, [t.id]: { ...state, required: e.target.checked } }))
+                          }
+                        />
+                      </td>
+                      <td className="py-2">
+                        <select
+                          className="rounded-lg border border-gray-300 px-2 py-1 text-xs"
+                          value={state.status}
+                          disabled={!canEdit}
+                          onChange={(e) => setRequirementState((prev) => ({ ...prev, [t.id]: { ...state, status: e.target.value } }))}
+                        >
+                          <option value="not_submitted">Not submitted</option>
+                          <option value="submitted">Submitted</option>
+                          <option value="verified">Verified</option>
+                        </select>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {canEdit && (
+              <button type="submit" disabled={savingRequirements} className="btn-primary px-4 py-2 text-sm">
+                {savingRequirements ? "Saving…" : "Save document requirements"}
+              </button>
+            )}
+          </form>
+        )}
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold">RECD units</h2>
+        <p className="text-xs text-gray-500">
+          Every unit destined for this site. Add another one that ships under this same order
+          (e.g. two different capacities delivered together), or as a fully separate order if
+          it&apos;s commercially/logistically distinct - a separate site record with its own
+          order number, sharing this site&apos;s address.
+        </p>
+        <ul className="space-y-2">
+          <li className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
+            <div>
+              <span className="font-medium">{site.order.product.name} ({site.order.product.model})</span>
+              <span className="text-gray-500"> · Qty {site.order.quantity}</span>
+            </div>
+            <span className="text-xs text-gray-400">Primary unit</span>
+          </li>
+          {site.order.lineItems.map((li) => (
+            <li key={li.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
+              <div>
+                <span className="font-medium">{li.product.name} ({li.product.model})</span>
+                <span className="text-gray-500"> · Qty {li.quantity}</span>
+              </div>
+              {canManageOrders && (
+                <button
+                  type="button"
+                  onClick={() => removeLineItem(li.id)}
+                  disabled={removingLineItemId === li.id}
+                  className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                >
+                  {removingLineItemId === li.id ? "Removing…" : "Remove"}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+        {canManageOrders && (
+          <form onSubmit={addUnit} className="space-y-2 pt-2 border-t border-gray-100">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={unitProductId}
+                onChange={(e) => setUnitProductId(e.target.value)}
+              >
+                <option value="">Product</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={1}
+                placeholder="Quantity"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={unitQuantity}
+                onChange={(e) => setUnitQuantity(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={unitMode === "same_order"} onChange={() => setUnitMode("same_order")} />
+                Add to this order (ships together)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={unitMode === "separate_order"} onChange={() => setUnitMode("separate_order")} />
+                Create as a separate order
+              </label>
+            </div>
+            <button type="submit" disabled={addingUnit || !unitProductId} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+              {addingUnit ? "Adding…" : "+ Add another unit"}
+            </button>
+          </form>
+        )}
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold">RECD delivery</h2>
+        {canEdit ? (
+          <form onSubmit={saveDelivery} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <select
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={deliveryProductId}
+              onChange={(e) => setDeliveryProductId(e.target.value)}
+            >
+              <option value="">Product</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={1}
+              placeholder="Quantity"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={deliveryQuantity}
+              onChange={(e) => setDeliveryQuantity(e.target.value)}
+            />
+            <select
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={deliveryStatus}
+              onChange={(e) => setDeliveryStatus(e.target.value)}
+            >
+              {DELIVERY_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <input
+              type="number"
+              placeholder="Priority (lower = more urgent)"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={deliveryPriority}
+              onChange={(e) => setDeliveryPriority(e.target.value)}
+            />
+            <textarea
+              placeholder="Status note (e.g. Delivery by 14-08-2026)"
+              rows={2}
+              className="sm:col-span-2 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={deliveryNote}
+              onChange={(e) => setDeliveryNote(e.target.value)}
+            />
+            <button type="submit" disabled={savingDelivery} className="btn-primary px-4 py-2 text-sm sm:col-span-2">
+              {savingDelivery ? "Saving…" : "Save delivery status"}
+            </button>
+          </form>
+        ) : (
+          <p className="text-sm text-gray-500">
+            {site.recdDelivery
+              ? `${site.recdDelivery.deliveryStatus} - ${site.recdDelivery.product?.name ?? ""}`
+              : "No delivery recorded yet."}
+          </p>
+        )}
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold">Photographs &amp; drawings (Google Drive)</h2>
+        {site.photosDriveFolderUrl || site.drawingsDriveFolderUrl ? (
+          <div className="flex flex-wrap gap-3">
+            {site.photosDriveFolderUrl && (
+              <a
+                href={site.photosDriveFolderUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                📁 Open Photographs folder
+              </a>
+            )}
+            {site.drawingsDriveFolderUrl && (
+              <a
+                href={site.drawingsDriveFolderUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                📁 Open Drawings folder
+              </a>
+            )}
+          </div>
+        ) : canEdit ? (
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500">
+              Creates a Photographs and a Drawings folder in the company Drive account for this site. Do this once.
+            </p>
+            <button
+              type="button"
+              onClick={createDriveFolders}
+              disabled={creatingDriveFolders}
+              className="btn-primary px-4 py-2 text-sm"
+            >
+              {creatingDriveFolders ? "Creating…" : "Create Drive folders"}
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400">No Drive folders created yet.</p>
+        )}
+      </section>
 
       {canAssignVendor && (
         <section className="card p-5 space-y-3">
