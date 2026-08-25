@@ -3,14 +3,32 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/apiClient";
+import { DataTable, DataTableColumn } from "@/components/DataTable";
 
 interface SiteRow {
   id: string;
   address: string | null;
+  companyName: string | null;
   currentStage: { label: string; phase: string };
   assignedEngineer: { name: string } | null;
+  vendor: { name: string } | null;
   updatedAt: string;
-  order: { orderNumber: string; customer: { name: string } };
+  order: {
+    orderNumber: string;
+    customer: { name: string };
+    product: { name: string; model: string } | null;
+    lineItems: { product: { name: string; model: string } }[];
+  };
+  stageEvents: { statusOption: { label: string } }[];
+}
+
+/** All RECDs at this site's order - the base product plus any extra units added as
+ * order line items (the "add another RECD unit -> same order" path). A site can have
+ * more than one product this way without a second order, so any column/filter over
+ * "which product is at this site" has to look at both, not just `order.product`. */
+function allProducts(s: SiteRow): { name: string; model: string }[] {
+  const base = s.order.product ? [s.order.product] : [];
+  return [...base, ...s.order.lineItems.map((li) => li.product)];
 }
 
 function daysSince(updatedAt: string) {
@@ -18,6 +36,10 @@ function daysSince(updatedAt: string) {
 }
 function isStuck(updatedAt: string) {
   return daysSince(updatedAt) > 2;
+}
+
+function updateStatus(s: SiteRow) {
+  return s.stageEvents[0]?.statusOption.label ?? "No updates yet";
 }
 
 function LastUpdate({ updatedAt }: { updatedAt: string }) {
@@ -35,6 +57,54 @@ function LastUpdate({ updatedAt }: { updatedAt: string }) {
   );
 }
 
+const columns: DataTableColumn<SiteRow>[] = [
+  {
+    key: "orderNumber",
+    label: "Order #",
+    accessor: (s) => s.order.orderNumber,
+    filterType: "text",
+    render: (s) => (
+      <Link href={`/sites/${s.id}`} className="font-mono text-xs font-semibold hover:underline" style={{ color: "var(--theme-primary)" }}>
+        {s.order.orderNumber}
+      </Link>
+    ),
+    alwaysVisible: true,
+  },
+  { key: "siteName", label: "Site name", accessor: (s) => s.companyName ?? "", filterType: "text" },
+  { key: "address", label: "Address", accessor: (s) => s.address ?? "", filterType: "text" },
+  { key: "customer", label: "Customer", accessor: (s) => s.order.customer.name },
+  {
+    key: "product",
+    label: "Product",
+    accessorList: (s) => allProducts(s).map((p) => `${p.name} (${p.model})`),
+    render: (s) => {
+      const products = allProducts(s);
+      if (products.length === 0) return "-";
+      return (
+        <>
+          {products.map((p, i) => (
+            <span key={i}>
+              {i > 0 && ", "}
+              {p.name} <span className="text-gray-400 font-mono text-xs">{p.model}</span>
+            </span>
+          ))}
+        </>
+      );
+    },
+  },
+  { key: "stage", label: "Stage", accessor: (s) => s.currentStage.label },
+  { key: "updateStatus", label: "Update status", accessor: (s) => updateStatus(s) },
+  { key: "engineer", label: "Engineer", accessor: (s) => s.assignedEngineer?.name ?? "Unassigned" },
+  { key: "vendor", label: "Vendor", accessor: (s) => s.vendor?.name ?? "Unassigned" },
+  {
+    key: "lastUpdate",
+    label: "Last update",
+    accessor: (s) => new Date(s.updatedAt).toLocaleDateString(),
+    filterType: "text",
+    render: (s) => <LastUpdate updatedAt={s.updatedAt} />,
+  },
+];
+
 export default function SitesPage() {
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -47,77 +117,60 @@ export default function SitesPage() {
 
   return (
     <div className="space-y-4" data-testid="sites-page">
-      <div>
+      <div className="print:hidden">
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>
           Sites
         </h1>
         <p className="mt-1 text-sm text-gray-500">{sites.length} active sites</p>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
 
-      {/* Desktop table */}
-      <div className="table-desktop">
-        <div className="table-scroll card overflow-hidden">
-          <table className="w-full border-collapse text-sm">
-            <thead className="bg-gray-50 text-left text-[0.6875rem] font-semibold uppercase tracking-wider text-gray-500">
-              <tr>
-                <th className="px-5 py-3">Order #</th>
-                <th className="px-5 py-3">Customer</th>
-                <th className="px-5 py-3">Stage</th>
-                <th className="px-5 py-3">Engineer</th>
-                <th className="px-5 py-3">Last update</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {sites.map((s) => (
-                <tr key={s.id} className="hover:bg-gray-50/60">
-                  <td className="px-5 py-3 font-medium">
-                    <Link href={`/sites/${s.id}`} className="font-mono text-xs font-semibold hover:underline" style={{ color: "var(--theme-primary)" }}>
-                      {s.order.orderNumber}
-                    </Link>
-                  </td>
-                  <td className="px-5 py-3">{s.order.customer.name}</td>
-                  <td className="px-5 py-3">{s.currentStage.label}</td>
-                  <td className="px-5 py-3">{s.assignedEngineer?.name ?? "Unassigned"}</td>
-                  <td className="px-5 py-3">
+      <DataTable storageKey="sites" title="Sites" columns={columns} rows={sites} rowKey={(s) => s.id} emptyMessage="No sites.">
+        {(filteredSites) => (
+          <div className="cards-mobile" data-testid="sites-mobile-cards">
+            {filteredSites.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {sites.length === 0 ? "No sites." : "No rows match the current filters."}
+              </div>
+            ) : (
+              filteredSites.map((s) => (
+                <Link
+                  key={s.id}
+                  href={`/sites/${s.id}`}
+                  className="data-card block"
+                  data-testid={`site-card-${s.order.orderNumber}`}
+                >
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <span className="font-mono text-xs font-semibold" style={{ color: "var(--theme-primary)" }}>{s.order.orderNumber}</span>
                     <LastUpdate updatedAt={s.updatedAt} />
-                  </td>
-                </tr>
-              ))}
-              {sites.length === 0 && (
-                <tr><td colSpan={5} className="px-5 py-8 text-center text-gray-400">No sites.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Mobile cards */}
-      <div className="cards-mobile" data-testid="sites-mobile-cards">
-        {sites.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No sites.</div>
-        ) : (
-          sites.map((s) => (
-            <Link
-              key={s.id}
-              href={`/sites/${s.id}`}
-              className="data-card block"
-              data-testid={`site-card-${s.order.orderNumber}`}
-            >
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <span className="font-mono text-xs font-semibold" style={{ color: "var(--theme-primary)" }}>{s.order.orderNumber}</span>
-                <LastUpdate updatedAt={s.updatedAt} />
-              </div>
-              <p className="text-sm font-semibold text-gray-900 truncate">{s.order.customer.name}</p>
-              <p className="text-xs text-gray-500 mb-2">{s.currentStage.label} · {s.currentStage.phase}</p>
-              <div className="data-card-row">
-                <span className="label">Engineer</span>
-                <span className="value">{s.assignedEngineer?.name ?? "Unassigned"}</span>
-              </div>
-            </Link>
-          ))
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{s.companyName ?? "Unnamed site"}</p>
+                  <p className="text-xs text-gray-500 truncate">{s.order.customer.name}</p>
+                  <p className="text-xs text-gray-500 mb-2">{s.currentStage.label} · {updateStatus(s)}</p>
+                  {s.address && (
+                    <div className="data-card-row">
+                      <span className="label">Address</span>
+                      <span className="value">{s.address}</span>
+                    </div>
+                  )}
+                  <div className="data-card-row">
+                    <span className="label">Product</span>
+                    <span className="value">{allProducts(s).map((p) => `${p.name} (${p.model})`).join(", ") || "-"}</span>
+                  </div>
+                  <div className="data-card-row">
+                    <span className="label">Engineer</span>
+                    <span className="value">{s.assignedEngineer?.name ?? "Unassigned"}</span>
+                  </div>
+                  <div className="data-card-row">
+                    <span className="label">Vendor</span>
+                    <span className="value">{s.vendor?.name ?? "Unassigned"}</span>
+                  </div>
+                </Link>
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
     </div>
   );
 }

@@ -5,11 +5,15 @@ import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import Nav from "./Nav";
 import BottomNav from "./BottomNav";
+import AgentChatBubble from "./AgentChatBubble";
 
 // Each protected route lists the permissions that grant access. Holding ANY of them is enough.
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/dashboard": ["view_dashboard"],
   "/orders": ["manage_orders"],
+  "/customers": ["manage_orders"],
+  "/products": ["manage_orders"],
+  "/reports": ["view_dashboard"],
   "/sites": ["view_site_status"],
   "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
   "/vendors": ["manage_vendors"],
@@ -19,7 +23,7 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
-const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/vendors", "/users", "/amc-orders", "/settings"];
+const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/customers", "/products", "/reports", "/vendors", "/users", "/amc-orders", "/settings"];
 
 function canAccess(permissions: string[], route: string): boolean {
   const required = ROUTE_PERMISSIONS[route];
@@ -136,7 +140,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (user.role.key === "customer") {
-    return isCustomerPortal ? <div className="min-h-screen bg-gray-50">{children}</div> : null;
+    return isCustomerPortal ? (
+      <div className="min-h-screen bg-gray-50">
+        {children}
+        <AgentChatBubble />
+      </div>
+    ) : null;
   }
 
   // Staff with no accessible module at all (e.g. Finance, or a brand-new role with no
@@ -164,7 +173,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         {/* Mobile top bar with hamburger (hidden on lg+) */}
         <header
           data-testid="mobile-topbar"
-          className="lg:hidden sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-gray-200 bg-white/95 backdrop-blur-sm px-4 h-14"
+          className="lg:hidden print:hidden sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-gray-200 bg-white/95 backdrop-blur-sm px-4 h-14"
         >
           <button
             data-testid="mobile-menu-button"
@@ -181,9 +190,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
           </div>
           <div className="w-9" aria-hidden />
         </header>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 overflow-auto">{children}</main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 print:p-0 overflow-auto">{children}</main>
       </div>
       <BottomNav onProfileClick={() => setMobileNavOpen(true)} />
+      <AgentChatBubble />
     </div>
   );
 }

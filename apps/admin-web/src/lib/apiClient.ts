@@ -35,5 +35,9 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`);
   }
-  return res.json() as Promise<T>;
+  // 204 No Content (every DELETE route in this app responds this way) has no body for
+  // res.json() to parse - it throws "Unexpected end of JSON input" otherwise, even though
+  // the request itself succeeded. No caller reads the resolved value of a DELETE call.
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }

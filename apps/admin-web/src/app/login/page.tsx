@@ -1,8 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Script from "next/script";
 import { useAuth } from "@/components/AuthContext";
 import { api } from "@/lib/apiClient";
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: { client_id: string; callback: (response: { credential: string }) => void }) => void;
+          renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void;
+        };
+      };
+    };
+  }
+}
 
 type Tab = "staff" | "customer" | "vendor";
 
@@ -19,6 +33,39 @@ export default function LoginPage() {
   const [password, setPassword] = useState("changeme123");
   const [staffError, setStaffError] = useState<string | null>(null);
   const [staffLoading, setStaffLoading] = useState(false);
+
+  // Google sign-in - an ADDITIONAL staff login method only. Deliberately rendered inside the
+  // Staff tab and nowhere else: the Customer tab below stays RECD Serial Number + phone + OTP,
+  // and POST /auth/google rejects customer accounts server-side too.
+  const googleButtonRef = useRef<HTMLDivElement>(null);
+  const [googleError, setGoogleError] = useState<string | null>(null);
+
+  async function handleGoogleCredential(response: { credential: string }) {
+    setGoogleError(null);
+    try {
+      const result = await api<{ token: string; user: { name: string } }>("/auth/google", {
+        method: "POST",
+        body: JSON.stringify({ credential: response.credential }),
+      });
+      await login(result.token);
+    } catch (err) {
+      setGoogleError(err instanceof Error ? err.message : "Google sign-in failed");
+    }
+  }
+
+  function initGoogleButton() {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId || !window.google || !googleButtonRef.current) return;
+    window.google.accounts.id.initialize({ client_id: clientId, callback: handleGoogleCredential });
+    window.google.accounts.id.renderButton(googleButtonRef.current, { theme: "outline", size: "large", width: 300 });
+  }
+
+  useEffect(() => {
+    // The GSI script may already be loaded/cached from a previous visit, in which case
+    // next/script's onLoad won't fire again - so also try once on mount.
+    initGoogleButton();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   // Customer Login State
   const [orderNumber, setOrderNumber] = useState("ORD-2026-0001");
@@ -169,6 +216,19 @@ export default function LoginPage() {
             <button type="submit" disabled={staffLoading} className="btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-50">
               {staffLoading ? "Signing in..." : "Sign in"}
             </button>
+
+            {process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && (
+              <>
+                <div className="flex items-center gap-3 pt-1">
+                  <div className="h-px flex-1 bg-gray-200" />
+                  <span className="text-xs text-gray-400">or</span>
+                  <div className="h-px flex-1 bg-gray-200" />
+                </div>
+                {googleError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{googleError}</div>}
+                <div className="flex justify-center" data-testid="google-signin-button" ref={googleButtonRef} />
+                <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" onLoad={initGoogleButton} />
+              </>
+            )}
           </form>
         )}
 

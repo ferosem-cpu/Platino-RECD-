@@ -36,6 +36,24 @@ const liveLinks = [
     ),
   },
   {
+    href: "/customers",
+    label: "Customers",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21" />
+      </svg>
+    ),
+  },
+  {
+    href: "/products",
+    label: "Products",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+      </svg>
+    ),
+  },
+  {
     href: "/complaints",
     label: "Complaints",
     icon: (
@@ -50,6 +68,15 @@ const liveLinks = [
     icon: (
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" />
+      </svg>
+    ),
+  },
+  {
+    href: "/reports",
+    label: "Reports",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
       </svg>
     ),
   },
@@ -83,14 +110,6 @@ const phase2Links = [
     ),
   },
   {
-    label: "Reports",
-    icon: (
-      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
-      </svg>
-    ),
-  },
-  {
     label: "Structure diagrams",
     icon: (
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -115,9 +134,12 @@ const settingsLink = {
 const LINK_PERMISSIONS: Record<string, string[]> = {
   "/dashboard": ["view_dashboard"],
   "/orders": ["manage_orders"],
+  "/customers": ["manage_orders"],
+  "/products": ["manage_orders"],
   "/sites": ["view_site_status"],
   "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
   "/vendors": ["manage_vendors"],
+  "/reports": ["view_site_status", "manage_orders", "manage_vendors"],
   "/users": ["manage_users"],
   "/amc-orders": ["manage_amc_orders"],
 };
@@ -162,7 +184,7 @@ export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
 
       <nav
         data-testid="sidebar-nav"
-        className={`sidebar fixed inset-y-0 left-0 z-50 w-60 shrink-0 flex flex-col overflow-y-auto transform transition-transform duration-300 ease-in-out
+        className={`sidebar fixed inset-y-0 left-0 z-50 w-60 shrink-0 flex flex-col overflow-y-auto transform transition-transform duration-300 ease-in-out print:hidden
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
           lg:relative lg:translate-x-0`}
       >
