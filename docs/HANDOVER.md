@@ -585,10 +585,32 @@ first), Google sign-in (`GOOGLE_CLIENT_ID`), Drive integration, and real SMTP de
 correctly degrade to "not configured" rather than erroring, per §24.5, but none has been exercised
 with real credentials yet.
 
+### 24.8 Remaining pages click-tested (2026-08-25, staff/Super Admin)
+
+Customers, Products, Orders (list + detail, including the Google Maps link and "Sites for this
+customer" panel), Reports (`/reports` index correctly shows only the three non-finance reports;
+`/reports/sitc` runs and returns the seeded site), and Vendors (list renders status/engineer/site
+counts and the "Archive" action on approved vendors - not clicked, since archiving a real vendor
+row wasn't necessary just to confirm the button renders) - all load without console errors and
+against real API responses (checked via `read_network_requests`, not just the rendered text).
+
+Two apparent "empty" renders (`Orders` briefly showing "No orders yet.", `/reports/sitc` briefly
+showing "No sites match these filters.") were both just React's first paint racing the API
+response, not bugs - re-reading the page a moment later showed the row in both cases, and the
+network tab confirmed the API had already returned the data correctly.
+
+**Found, not fixed - pre-existing data, not introduced by this port:** the live
+`platino-recd-mumbai` database already has a vendor literally named **"Zan-F vendor"**
+(contact "Omar", `ferosem@gmail.com`), created 2026-07-06 - before this session touched anything.
+This port never wrote to the `Vendor` table. Worth cleaning up since it's a name/personal-email
+leftover sitting in production data, but that's a data decision for the business owner, not
+something to silently delete.
+
 **Follow-ups if this branch is merged:**
 1. Set whichever env vars from §24.5 the business actually wants live (SMTP first, most valuable).
 2. Add a `crons` entry for `GET /agent/cron/cleanup-conversations` if agent history should expire.
-3. Reconcile the `_prisma_migrations` drift described above before anyone runs `prisma migrate
+3. Reconcile the `_prisma_migrations` drift described in §24.7 before anyone runs `prisma migrate
    deploy` against this database.
-4. Click-test the remaining new pages (Customers, Products, Order detail, Reports, Vendors
-   archiving) - only the customer login/portal path has been exercised in a real browser so far.
+4. Decide what to do about the pre-existing "Zan-F vendor" row in production data (§24.8).
+5. Rename the `DataTable.tsx` `localStorage` key prefix from `zan-app:` to `recd:` (§24.7,
+   cosmetic, not urgent).
