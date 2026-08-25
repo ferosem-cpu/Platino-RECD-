@@ -123,11 +123,13 @@ ALTER TABLE "RecdDelivery" ADD CONSTRAINT "RecdDelivery_productId_fkey"
 
 -- ---------------------------------------------------------------------------
 -- CompanySettings: letterhead identity (for DataTable print) + agent config
+-- "pinCode" already existed on this table before this migration (added out-of-band,
+-- untracked in git at the time) with the same TEXT/nullable shape needed here, so it is
+-- intentionally not re-added - the schema simply reuses the existing column.
 -- ---------------------------------------------------------------------------
 ALTER TABLE "CompanySettings" ADD COLUMN "legalName" TEXT;
 ALTER TABLE "CompanySettings" ADD COLUMN "address" TEXT;
 ALTER TABLE "CompanySettings" ADD COLUMN "city" TEXT;
-ALTER TABLE "CompanySettings" ADD COLUMN "pinCode" TEXT;
 ALTER TABLE "CompanySettings" ADD COLUMN "email" TEXT;
 ALTER TABLE "CompanySettings" ADD COLUMN "website" TEXT;
 ALTER TABLE "CompanySettings" ADD COLUMN "phone" TEXT;
