@@ -4,12 +4,13 @@
  * Every route here is scoped to the caller's own conversations - no admin override, this is
  * personal chat history like any other user's own data.
  *
- * The upstream fork also carried a pending-action confirm/reject pair of routes here, backing
- * the agent's finance write tools (create_quotation / create_invoice / create_purchase_order /
- * create_expense). Those are not part of this app - the agent here is read-only - so neither
- * the routes nor the AgentPendingAction table were ported. See HANDOVER.md §24.
+ * The upstream fork's finance write tools (create_quotation / create_invoice /
+ * create_purchase_order / create_expense) still aren't part of this app - no finance module
+ * here. create_order and create_product ARE, behind the same AgentPendingAction confirm-gate
+ * pattern (see executeConfirmedAction and the /actions/:actionId/confirm|reject routes below).
  */
 import { Router } from "express";
+import { STAGE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
@@ -93,3 +94,125 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, async
     res.status(500).json({ error: (err as Error).message });
   }
 });
+
+/** Executes the real Prisma write for one confirmed pending action, dispatched by toolName.
+ * Mirrors the equivalent REST create-route's logic exactly (see routes/orders.ts,
+ * routes/products.ts) rather than reinventing it, so a confirmed agent action and a normal
+ * UI-created record behave identically. Returns the created record's id.
+ */
+async function executeConfirmedAction(
+  toolName: string,
+  input: Record<string, unknown>,
+  userId: string,
+): Promise<string> {
+  switch (toolName) {
+    case "create_order": {
+      const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
+      const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const order = await prisma.order.create({
+        data: {
+          orderNumber,
+          customerId: String(input.customerId),
+          productId: String(input.productId),
+          quantity: Number(input.quantity),
+          value: input.value !== undefined && input.value !== null ? Number(input.value) : undefined,
+          orderDate: input.orderDate ? new Date(String(input.orderDate)) : undefined,
+          promisedDeliveryDate: input.promisedDeliveryDate ? new Date(String(input.promisedDeliveryDate)) : undefined,
+          plannedExhaustHookupType: (input.plannedExhaustHookupType as string | null) ?? undefined,
+          salesEngineerId: userId,
+          site: { create: { currentStageId: firstStage.id } },
+        },
+      });
+      return order.id;
+    }
+    case "create_product": {
+      const product = await prisma.product.create({
+        data: {
+          name: String(input.name),
+          model: String(input.model),
+          ratingSpec: (input.ratingSpec as string | null) ?? undefined,
+          capacityKva: input.capacityKva !== undefined && input.capacityKva !== null ? Number(input.capacityKva) : undefined,
+          warrantyMonths: input.warrantyMonths !== undefined && input.warrantyMonths !== null ? Number(input.warrantyMonths) : undefined,
+          shape: (input.shape as string | null) ?? undefined,
+          dimensions: (input.dimensions as string | null) ?? undefined,
+          weightKg: input.weightKg !== undefined && input.weightKg !== null ? Number(input.weightKg) : undefined,
+        },
+      });
+      return product.id;
+    }
+    default:
+      throw new Error(`Don't know how to execute confirmed action for tool "${toolName}".`);
+  }
+}
+
+/** Rewrites the tool-result message in a conversation's stored history that matches this
+ * actionId, so the transcript reflects the resolved (confirmed/rejected) state instead of
+ * staying frozen on "pending_confirmation" - the next chat turn's context, and the frontend
+ * re-render, both pick this up automatically. */
+function resolveActionInHistory(
+  messages: UnifiedMessage[],
+  actionId: string,
+  resolution: Record<string, unknown>,
+): UnifiedMessage[] {
+  return messages.map((m) => {
+    if (m.role !== "tool" || !m.content) return m;
+    try {
+      const parsed = JSON.parse(m.content);
+      if (parsed.actionId === actionId) {
+        return { ...m, content: JSON.stringify({ ...parsed, ...resolution }) };
+      }
+    } catch {
+      // not JSON - not a tool-result we care about
+    }
+    return m;
+  });
+}
+
+async function handleResolveAction(
+  req: AuthenticatedRequest,
+  res: import("express").Response,
+  outcome: "confirmed" | "rejected",
+) {
+  const conversation = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
+  if (!conversation || conversation.userId !== req.auth!.userId) {
+    return res.status(404).json({ error: "Conversation not found" });
+  }
+  const action = await prisma.agentPendingAction.findUnique({ where: { id: String(req.params.actionId) } });
+  if (!action || action.conversationId !== conversation.id) {
+    return res.status(404).json({ error: "Pending action not found" });
+  }
+  if (action.status !== "pending") {
+    return res.status(400).json({ error: `This action was already ${action.status}.` });
+  }
+
+  try {
+    let resultId: string | null = null;
+    if (outcome === "confirmed") {
+      resultId = await executeConfirmedAction(action.toolName, action.input as Record<string, unknown>, req.auth!.userId);
+    }
+
+    await prisma.agentPendingAction.update({
+      where: { id: action.id },
+      data: { status: outcome, resultId, resolvedAt: new Date() },
+    });
+
+    const priorHistory = (conversation.messages as unknown as UnifiedMessage[]) ?? [];
+    const newHistory = resolveActionInHistory(priorHistory, action.id, { status: outcome, resultId });
+    const updated = await prisma.agentConversation.update({
+      where: { id: conversation.id },
+      data: { messages: newHistory as unknown as object },
+    });
+
+    res.json({ status: outcome, resultId, messages: updated.messages });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+}
+
+agentConversationsRouter.post("/conversations/:id/actions/:actionId/confirm", authenticate, (req: AuthenticatedRequest, res) =>
+  handleResolveAction(req, res, "confirmed"),
+);
+
+agentConversationsRouter.post("/conversations/:id/actions/:actionId/reject", authenticate, (req: AuthenticatedRequest, res) =>
+  handleResolveAction(req, res, "rejected"),
+);

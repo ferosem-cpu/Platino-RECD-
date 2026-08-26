@@ -2,15 +2,17 @@ import type { AgentTool } from "./types";
 import { driveTools } from "./driveTool";
 import { appReadTools } from "./appReadTools";
 import { getDocumentDetailTool } from "./appDetailTool";
+import { appWriteTools } from "./appWriteTools";
 
-// Read tools + Drive tools only. The upstream fork also registers write tools
-// (create_expense / create_quotation / create_invoice / create_purchase_order) behind an
-// AgentPendingAction confirm-gate; those are finance-module features and are not part of
-// this app, so neither the tools nor the pending-action table were ported.
+// The upstream fork's finance-module write tools (create_expense / create_quotation /
+// create_invoice / create_purchase_order) still aren't part of this app - no finance module
+// here. create_order and create_product ARE, behind the same AgentPendingAction confirm-gate
+// pattern (see appWriteTools.ts).
 export const allTools: AgentTool[] = [
   ...driveTools,
   ...appReadTools,
   getDocumentDetailTool,
+  ...appWriteTools,
 ];
 
 export function getToolByName(name: string): AgentTool | undefined {

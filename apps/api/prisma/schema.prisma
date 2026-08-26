@@ -92,6 +92,7 @@ model User {
   amcExpiryRemindersCleared AmcOrder[]    @relation("AmcExpiryClearedBy")
   agentLlmProvidersCreated AgentLlmProvider[] @relation("AgentLlmProviderCreator")
   agentConversations       AgentConversation[] @relation("AgentConversationUser")
+  agentPendingActionsCreated AgentPendingAction[] @relation("AgentPendingActionCreator")
 }
 
 model OtpCode {
@@ -636,4 +637,29 @@ model AgentConversation {
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  pendingActions AgentPendingAction[]
+}
+
+/// A write action the agent has proposed but not yet executed - the confirm-gate for this
+/// app's agent write tools (create_order, create_product). The tool handler creates one of
+/// these instead of writing real data; only the confirm route performs the actual Prisma
+/// write, reusing the same logic the real REST create-routes use. `input` is what the LLM
+/// proposed (already validated); `preview` is the human-readable summary shown in the
+/// confirm card.
+model AgentPendingAction {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   AgentConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  toolName       String
+  input          Json
+  preview        Json
+  /// pending | confirmed | rejected
+  status         String            @default("pending")
+  resultId       String?
+  createdById    String
+  createdBy      User              @relation("AgentPendingActionCreator", fields: [createdById], references: [id])
+  createdAt      DateTime          @default(now())
+  resolvedAt     DateTime?
+
+  @@index([conversationId])
 }
