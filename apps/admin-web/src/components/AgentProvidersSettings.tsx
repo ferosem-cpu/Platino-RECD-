@@ -37,6 +37,8 @@ const PROVIDER_PRESETS = [
   { key: "deepseek", label: "DeepSeek", providerType: "openai_compatible", baseUrl: "https://api.deepseek.com/v1" },
   { key: "openrouter", label: "OpenRouter", providerType: "openai_compatible", baseUrl: "https://openrouter.ai/api/v1" },
   { key: "together", label: "Together AI", providerType: "openai_compatible", baseUrl: "https://api.together.xyz/v1" },
+  { key: "nvidia", label: "NVIDIA NIM", providerType: "openai_compatible", baseUrl: "https://integrate.api.nvidia.com/v1" },
+  { key: "grok", label: "xAI (Grok)", providerType: "openai_compatible", baseUrl: "https://api.x.ai/v1" },
   { key: "custom", label: "Custom (OpenAI-compatible)", providerType: "openai_compatible", baseUrl: "" },
 ] as const;
 
