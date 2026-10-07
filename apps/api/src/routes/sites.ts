@@ -12,6 +12,7 @@ import {
   setSiteDocumentRequirementsSchema,
   upsertRecdDeliverySchema,
   cloneOrderForSiteSchema,
+  setSiteRegionSchema,
   PERMISSION_KEY,
   PENDING_ACTION_CATEGORY,
   VENDOR_STATUS,
@@ -67,6 +68,8 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
       contacts: { orderBy: { createdAt: "asc" } },
       documentRequirements: { include: { requirementType: true }, orderBy: { requirementType: { sequenceOrder: "asc" } } },
       recdDelivery: { include: { product: true } },
+      region: { select: { id: true, name: true } },
+      units: { include: { product: { select: { id: true, name: true, model: true } } }, orderBy: { createdAt: "asc" } },
     },
   });
   if (!detail) return res.status(404).json({ error: "Site not found" });
@@ -113,6 +116,25 @@ sitesRouter.patch(
   },
 );
 
+/** Assigns (or clears) the service region of a site. Staff-only; drives Regional Manager reminders. */
+sitesRouter.put("/:id/region", requirePermission(PERMISSION_KEY.MANAGE_REGIONS), async (req: AuthenticatedRequest, res) => {
+  const parsed = setSiteRegionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const siteId = asString(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (parsed.data.regionId) {
+    const region = await prisma.region.findUnique({ where: { id: parsed.data.regionId } });
+    if (!region || !region.isActive) return res.status(400).json({ error: "Unknown or inactive region" });
+  }
+  const updated = await prisma.site.update({
+    where: { id: siteId },
+    data: { regionId: parsed.data.regionId },
+    include: { region: { select: { id: true, name: true } } },
+  });
+  res.json(updated);
+});
+
 /** Creates a sibling Order+Site for another RECD delivered to this same physical location -
  *  same address/companyName/vendor as this site, reset to the first stage, but its own
  *  orderNumber so it's tracked (and later invoiced/dispatched) independently. The alternative
@@ -125,6 +147,14 @@ sitesRouter.post("/:id/clone-order", requirePermission(PERMISSION_KEY.MANAGE_ORD
   const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: true } });
   if (!site) return res.status(404).json({ error: "Site not found" });
 
+  const taken = await prisma.recdUnit.findMany({
+    where: { serialNo: { in: parsed.data.recdSerials } },
+    select: { serialNo: true },
+  });
+  if (taken.length) {
+    return res.status(409).json({ error: `Serial number already registered: ${taken.map((t) => t.serialNo).join(", ")}` });
+  }
+
   const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
   const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -134,17 +164,29 @@ sitesRouter.post("/:id/clone-order", requirePermission(PERMISSION_KEY.MANAGE_ORD
       customerId: site.order.customerId,
       productId: parsed.data.productId,
       quantity: parsed.data.quantity,
+      // A sibling order for the same physical location is normally raised against the same PO.
+      poNumber: site.order.poNumber,
+      poDate: site.order.poDate,
       salesEngineerId: req.auth!.userId,
       site: {
         create: {
           address: site.address,
           companyName: site.companyName,
           vendorId: site.vendorId,
+          regionId: site.regionId,
           currentStageId: firstStage.id,
         },
       },
     },
     include: { site: true, product: true },
+  });
+  await prisma.recdUnit.createMany({
+    data: parsed.data.recdSerials.map((serialNo) => ({
+      serialNo,
+      orderId: newOrder.id,
+      siteId: newOrder.site?.id,
+      productId: parsed.data.productId,
+    })),
   });
 
   res.status(201).json(newOrder);

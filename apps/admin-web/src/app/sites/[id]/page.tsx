@@ -66,6 +66,8 @@ interface SiteDetail {
   currentStage: { id: string; label: string; phase: string };
   assignedEngineer: { name: string } | null;
   vendor: { id: string; name: string } | null;
+  region: { id: string; name: string } | null;
+  units: Array<{ id: string; serialNo: string | null; lineItemId: string | null; product: { name: string; model: string } }>;
   stageEvents: Array<{
     id: string;
     comment: string;
@@ -114,6 +116,7 @@ export default function SiteDetailPage() {
   const canEdit = hasPermission("change_site_status");
   const canAssignVendor = hasPermission("manage_vendors");
   const canManageOrders = hasPermission("manage_orders");
+  const canManageRegions = hasPermission("manage_regions");
 
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<Lookup[]>([]);
@@ -177,6 +180,14 @@ export default function SiteDetailPage() {
   const [unitMode, setUnitMode] = useState<"same_order" | "separate_order">("same_order");
   const [addingUnit, setAddingUnit] = useState(false);
   const [removingLineItemId, setRemovingLineItemId] = useState<string | null>(null);
+  const [unitSerials, setUnitSerials] = useState<string[]>([""]);
+  const unitQty = Math.max(1, Math.min(50, parseInt(unitQuantity, 10) || 1));
+  const unitSerialInputs = Array.from({ length: unitQty }, (_, i) => unitSerials[i] ?? "");
+
+  // Service region
+  const [regions, setRegions] = useState<{ id: string; name: string; isActive: boolean }[]>([]);
+  const [regionId, setRegionId] = useState("");
+  const [savingRegion, setSavingRegion] = useState(false);
 
   // Drive folders
   const [creatingDriveFolders, setCreatingDriveFolders] = useState(false);
@@ -187,6 +198,7 @@ export default function SiteDetailPage() {
       setSite(detail);
       setStageId((prev) => prev || detail.currentStage.id);
       setAssignVendorId((prev) => prev || detail.vendor?.id || "");
+      setRegionId((prev) => prev || detail.region?.id || "");
       setLocAddress((prev) => prev || detail.address || "");
       setLocLat((prev) => prev || detail.gpsLat || "");
       setLocLng((prev) => prev || detail.gpsLng || "");
@@ -221,8 +233,9 @@ export default function SiteDetailPage() {
     api<Lookup[]>("/meta/photo-checkpoints").then(setCheckpoints).catch(() => {});
     api<{ id: string; key: string; label: string }[]>("/meta/document-requirement-types").then(setRequirementTypes).catch(() => {});
     api<{ id: string; name: string; model: string }[]>("/meta/products").then(setProducts).catch(() => {});
+    if (canManageRegions) api<{ id: string; name: string; isActive: boolean }[]>("/regions").then(setRegions).catch(() => {});
     if (canAssignVendor) api<{ id: string; name: string; status: string }[]>("/vendors").then(setVendors).catch(() => {});
-  }, [load, canAssignVendor]);
+  }, [load, canAssignVendor, canManageRegions]);
 
   function flash(message: string) {
     setBanner(message);
@@ -427,26 +440,44 @@ export default function SiteDetailPage() {
     }
   }
 
+  async function saveRegion(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingRegion(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/region`, { method: "PUT", body: JSON.stringify({ regionId: regionId || null }) });
+      flash("Region saved.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save region");
+    } finally {
+      setSavingRegion(false);
+    }
+  }
+
   async function addUnit(e: React.FormEvent) {
     e.preventDefault();
     if (!site || !unitProductId) return;
     setAddingUnit(true);
     setError(null);
     try {
-      const quantity = parseInt(unitQuantity, 10) || 1;
+      const quantity = unitQty;
+      if (unitSerialInputs.some((v) => !v.trim())) throw new Error(`Enter the RECD serial number for each of the ${quantity} unit(s)`);
+      const recdSerials = unitSerialInputs.map((v) => v.trim());
       if (unitMode === "same_order") {
         await api(`/orders/${site.order.id}/line-items`, {
           method: "POST",
-          body: JSON.stringify({ productId: unitProductId, quantity }),
+          body: JSON.stringify({ productId: unitProductId, quantity, recdSerials }),
         });
         setUnitProductId("");
         setUnitQuantity("1");
+        setUnitSerials([""]);
         flash("Unit added to this order.");
         await load();
       } else {
         const newOrder = await api<{ orderNumber: string; site: { id: string } }>(`/sites/${id}/clone-order`, {
           method: "POST",
-          body: JSON.stringify({ productId: unitProductId, quantity }),
+          body: JSON.stringify({ productId: unitProductId, quantity, recdSerials }),
         });
         router.push(`/sites/${newOrder.site.id}`);
       }
@@ -739,6 +770,18 @@ export default function SiteDetailPage() {
             </li>
           ))}
         </ul>
+        <div className="rounded-lg bg-gray-50 px-3 py-2" data-testid="site-unit-serials">
+          <p className="text-xs font-medium text-gray-500 mb-1">RECD serial numbers</p>
+          {site.units.length === 0 && <p className="text-xs text-gray-400">No units recorded.</p>}
+          <ul className="text-xs space-y-0.5">
+            {site.units.map((u) => (
+              <li key={u.id}>
+                <span className="font-mono font-semibold">{u.serialNo ?? <span className="text-amber-600">serial pending</span>}</span>
+                <span className="text-gray-500"> · {u.product.name} ({u.product.model})</span>
+              </li>
+            ))}
+          </ul>
+        </div>
         {canManageOrders && (
           <form onSubmit={addUnit} className="space-y-2 pt-2 border-t border-gray-100">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -760,6 +803,24 @@ export default function SiteDetailPage() {
                 value={unitQuantity}
                 onChange={(e) => setUnitQuantity(e.target.value)}
               />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {unitSerialInputs.map((v, i) => (
+                <input
+                  key={i}
+                  required
+                  minLength={3}
+                  maxLength={40}
+                  placeholder={unitQty > 1 ? `Unit ${i + 1} serial number` : "RECD serial number"}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"
+                  value={v}
+                  onChange={(e) => setUnitSerials((prev) => {
+                    const next = Array.from({ length: unitQty }, (_, k) => prev[k] ?? "");
+                    next[i] = e.target.value;
+                    return next;
+                  })}
+                />
+              ))}
             </div>
             <div className="flex flex-col sm:flex-row gap-2 text-sm">
               <label className="flex items-center gap-2">
@@ -879,6 +940,29 @@ export default function SiteDetailPage() {
           <p className="text-sm text-gray-400">No Drive folders created yet.</p>
         )}
       </section>
+
+      {(canManageRegions || site.region) && (
+        <section className="card p-5 space-y-3" data-testid="site-region">
+          <h2 className="text-sm font-semibold">Service region</h2>
+          <p className="text-xs text-gray-500">
+            Decides which Regional Manager is reminded and escalated to for service on this site.
+            {!canManageRegions && <> Current region: <span className="font-medium">{site.region?.name ?? "Unassigned"}</span></>}
+          </p>
+          {canManageRegions && (
+            <form onSubmit={saveRegion} className="flex flex-wrap items-center gap-3">
+              <select className="rounded-lg border border-gray-300 px-3 py-2 text-sm" value={regionId} onChange={(e) => setRegionId(e.target.value)}>
+                <option value="">Unassigned</option>
+                {regions.filter((r) => r.isActive || r.id === site.region?.id).map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}{r.isActive ? "" : " (inactive)"}</option>
+                ))}
+              </select>
+              <button type="submit" disabled={savingRegion} className="btn-primary px-4 py-2 text-sm">
+                {savingRegion ? "Saving…" : "Save region"}
+              </button>
+            </form>
+          )}
+        </section>
+      )}
 
       {canAssignVendor && (
         <section className="card p-5 space-y-3">

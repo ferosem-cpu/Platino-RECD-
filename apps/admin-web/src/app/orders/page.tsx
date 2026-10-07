@@ -15,6 +15,9 @@ interface OrderRow {
   product: { name: string; model: string };
   lineItems: { product: { name: string; model: string } }[];
   site: { companyName: string | null; currentStage: { label: string } } | null;
+  poNumber: string | null;
+  poDuplicateFlag: boolean;
+  units: { id: string; serialNo: string | null }[];
 }
 
 /** All RECDs on this order - the base product plus any extra units added as line items
@@ -81,7 +84,21 @@ function OrdersPageInner() {
     value: "",
     orderDate: today(),
     plannedExhaustHookupType: EXHAUST_OPTIONS[0].value,
+    poNumber: "",
+    poDate: "",
+    allowDuplicatePo: false,
   });
+  // One RECD serial per unit - the array is resized to `quantity` at render/submit time.
+  const [serials, setSerials] = useState<string[]>([""]);
+  const qty = Math.max(1, Math.min(50, parseInt(form.quantity, 10) || 1));
+  const serialInputs = Array.from({ length: qty }, (_, i) => serials[i] ?? "");
+  function setSerialAt(i: number, v: string) {
+    setSerials((prev) => {
+      const next = Array.from({ length: qty }, (_, k) => prev[k] ?? "");
+      next[i] = v;
+      return next;
+    });
+  }
 
   function load() {
     api<OrderRow[]>("/orders").then(setOrders).catch((err) => setError(err instanceof Error ? err.message : "Failed to load orders"));
@@ -138,14 +155,21 @@ function OrdersPageInner() {
         productId = created.id;
       }
       if (!productId) throw new Error("Please choose or create a product");
+      if (serialInputs.some((v) => !v.trim())) throw new Error(`Enter the RECD serial number for each of the ${qty} unit(s)`);
+      const upper = serialInputs.map((v) => v.trim().toUpperCase());
+      if (new Set(upper).size !== upper.length) throw new Error("The same serial number is entered twice");
 
       await api("/orders", {
         method: "POST",
         body: JSON.stringify({
           customerId,
           productId,
-          quantity: parseInt(form.quantity, 10) || 1,
+          quantity: qty,
           value: parseFloat(form.value) || 0,
+          poNumber: form.poNumber.trim(),
+          poDate: form.poDate ? new Date(form.poDate).toISOString() : undefined,
+          allowDuplicatePo: form.allowDuplicatePo || undefined,
+          recdSerials: serialInputs.map((v) => v.trim()),
           orderDate: new Date(form.orderDate).toISOString(),
           plannedExhaustHookupType: form.plannedExhaustHookupType,
         }),
@@ -165,7 +189,11 @@ function OrdersPageInner() {
         productRatingSpec: "",
         value: "",
         quantity: "1",
+        poNumber: "",
+        poDate: "",
+        allowDuplicatePo: false,
       }));
+      setSerials([""]);
       load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create order");
@@ -211,6 +239,32 @@ function OrdersPageInner() {
               <Link href={`/orders/${o.id}`} className="font-mono text-xs font-semibold hover:underline" style={{ color: "var(--theme-primary)" }}>
                 {o.orderNumber}
               </Link>
+            ),
+          },
+          {
+            key: "po",
+            label: "PO #",
+            accessor: (o) => o.poNumber ?? "",
+            filterType: "text",
+            render: (o) => (
+              <span className="whitespace-nowrap">
+                {o.poNumber ?? "—"}
+                {o.poDuplicateFlag && <span className="badge badge-accent ml-1" title="Created as a duplicate PO by an admin">dup</span>}
+              </span>
+            ),
+          },
+          {
+            key: "serials",
+            label: "RECD serial no.",
+            accessorList: (o) => o.units.map((u) => u.serialNo ?? "pending"),
+            render: (o) => (
+              <span className="font-mono text-xs">
+                {o.units.length === 0 ? "—" : o.units.map((u, i) => (
+                  <span key={u.id} className={u.serialNo ? "" : "text-amber-600"}>
+                    {i > 0 && ", "}{u.serialNo ?? "pending"}
+                  </span>
+                ))}
+              </span>
             ),
           },
           { key: "siteName", label: "Site name", accessor: (o) => o.site?.companyName ?? "", filterType: "text" },
@@ -349,6 +403,41 @@ function OrdersPageInner() {
                   <label className="block text-xs font-medium text-gray-500 mb-1">Order date</label>
                   <input type="date" required className="field w-full" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} />
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Customer PO number</label>
+                  <input required maxLength={60} className="field w-full" value={form.poNumber} onChange={(e) => setForm({ ...form, poNumber: e.target.value })} data-testid="order-po-number" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">PO date (optional)</label>
+                  <input type="date" className="field w-full" value={form.poDate} onChange={(e) => setForm({ ...form, poDate: e.target.value })} />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-gray-500">
+                <input type="checkbox" checked={form.allowDuplicatePo} onChange={(e) => setForm({ ...form, allowDuplicatePo: e.target.checked })} />
+                Allow a duplicate PO for this customer (admins only - the order is flagged)
+              </label>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">RECD serial number{qty > 1 ? "s (one per unit)" : ""}</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {serialInputs.map((v, i) => (
+                    <input
+                      key={i}
+                      required
+                      minLength={3}
+                      maxLength={40}
+                      placeholder={qty > 1 ? `Unit ${i + 1} serial` : "Serial number"}
+                      className="field w-full font-mono"
+                      value={v}
+                      onChange={(e) => setSerialAt(i, e.target.value)}
+                      data-testid={`order-serial-${i}`}
+                    />
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-gray-400">Each physical RECD has its own unique serial number - it can never be reused.</p>
               </div>
 
               <div>

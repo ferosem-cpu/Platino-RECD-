@@ -93,6 +93,9 @@ model User {
   agentLlmProvidersCreated AgentLlmProvider[] @relation("AgentLlmProviderCreator")
   agentConversations       AgentConversation[] @relation("AgentConversationUser")
   agentPendingActionsCreated AgentPendingAction[] @relation("AgentPendingActionCreator")
+  regionsManaged       RegionManager[]
+  auditAsActor         UserAuditLog[]     @relation("AuditActor")
+  auditAsTarget        UserAuditLog[]     @relation("AuditTarget")
 }
 
 model OtpCode {
@@ -169,6 +172,7 @@ model Product {
 
   orders             Order[]
   orderLineItems     OrderLineItem[]
+  recdUnits          RecdUnit[]
   recdDeliveries     RecdDelivery[]
 }
 
@@ -197,12 +201,21 @@ model Order {
   salesEngineer            User?     @relation("SalesEngineer", fields: [salesEngineerId], references: [id])
   createdAt                DateTime  @default(now())
 
+  /// Customer's purchase order number (null only on legacy orders created before this field).
+  poNumber                 String?
+  poDate                   DateTime?
+  /// True when an admin knowingly created a second order against the same customer + PO number.
+  poDuplicateFlag          Boolean   @default(false)
+
   site Site?
+  units RecdUnit[]
   /// Additional RECD units delivered under this same order/site (e.g. a site takes a 500kva
   /// and a 380kva together) - the order's own productId/quantity above remains "unit 1",
   /// these are units 2+. A physically separate delivery/site instead gets its own sibling
   /// Order+Site row.
   lineItems OrderLineItem[]
+
+  @@index([customerId, poNumber])
 }
 
 /// A second (or third...) RECD product added to an existing order/site, for when multiple
@@ -218,6 +231,7 @@ model OrderLineItem {
   product   Product  @relation(fields: [productId], references: [id])
   quantity  Int
   createdAt DateTime @default(now())
+  units     RecdUnit[]
 }
 
 model Site {
@@ -276,6 +290,11 @@ model Site {
   contacts        SiteContact[]
   documentRequirements SiteDocumentRequirement[]
   recdDelivery    RecdDelivery?
+  units           RecdUnit[]
+
+  /// Service region (drives which Regional Manager is reminded/escalated to).
+  regionId        String?
+  region          Region?  @relation(fields: [regionId], references: [id])
 }
 
 // ---------------------------------------------------------------------------
@@ -662,4 +681,79 @@ model AgentPendingAction {
   resolvedAt     DateTime?
 
   @@index([conversationId])
+}
+
+
+// ---------------------------------------------------------------------------
+// Regions & Regional Managers (admin-defined - regions are data, not code)
+// ---------------------------------------------------------------------------
+
+model Region {
+  id        String   @id @default(cuid())
+  /// URL-safe slug derived from the name; unique so a rename can't collide silently.
+  key       String   @unique
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  managers RegionManager[]
+  sites    Site[]
+}
+
+model RegionManager {
+  regionId String
+  userId   String
+  region   Region @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([regionId, userId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// RECD units - one row per physical RECD. Service history, reports, warranty and AMC
+// attach to the unit, identified by its globally-unique serial number.
+// ---------------------------------------------------------------------------
+
+model RecdUnit {
+  id        String   @id @default(cuid())
+  /// Globally unique. Null only for legacy units awaiting entry ("serial pending");
+  /// every API path that creates a unit requires one.
+  serialNo  String?  @unique
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  siteId    String?
+  site      Site?    @relation(fields: [siteId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  /// Set for units that came from an extra product line on the order (OrderLineItem);
+  /// removing that line removes its units. Null = units of the order's own product.
+  lineItemId String?
+  lineItem  OrderLineItem? @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
+  /// active | retired - see RECD_UNIT_STATUS. A retired unit keeps its serial reserved.
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([siteId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail for user administration (create / edit / role change / (de)activate)
+// ---------------------------------------------------------------------------
+
+model UserAuditLog {
+  id           String   @id @default(cuid())
+  actorId      String?
+  actor        User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  targetUserId String
+  target       User     @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  /// see USER_AUDIT_ACTION in packages/shared
+  action       String
+  /// Before/after values of whatever changed (never passwords/hashes).
+  changes      Json?
+  createdAt    DateTime @default(now())
+
+  @@index([targetUserId, createdAt])
 }

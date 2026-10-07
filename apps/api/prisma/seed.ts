@@ -26,6 +26,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS, name: "Act on complaints assigned to you" },
     { key: PERMISSION_KEY.MANAGE_VENDORS, name: "Approve and manage external vendors" },
     { key: PERMISSION_KEY.MANAGE_AMC_ORDERS, name: "Create / view AMC orders" },
+    { key: PERMISSION_KEY.MANAGE_REGIONS, name: "Manage regions and regional managers" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -80,6 +81,21 @@ async function seedRoles() {
       name: "Finance",
       description: "Order value, invoicing, payment status - module deferred to Phase 2.",
       permissions: [],
+    },
+    [ROLE_KEY.REGIONAL_MANAGER]: {
+      name: "Regional Manager",
+      description: "Owns service activity for the regions mapped to them: receives reminders and escalations for their regions.",
+      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW, PERMISSION_KEY.VIEW_DASHBOARD],
+    },
+    [ROLE_KEY.SERVICE_MANAGER]: {
+      name: "Service Manager",
+      description: "Runs the service desk: manages and assigns customer tickets.",
+      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW, PERMISSION_KEY.VIEW_DASHBOARD],
+    },
+    [ROLE_KEY.SERVICE_ENGINEER]: {
+      name: "Service Engineer",
+      description: "Field service engineer: works tickets assigned to them.",
+      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS],
     },
     [ROLE_KEY.CUSTOMER]: {
       name: "Customer",

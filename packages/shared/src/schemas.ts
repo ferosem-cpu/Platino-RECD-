@@ -8,6 +8,37 @@ export const loginSchema = z.object({
 /** E.164-ish mobile number: optional leading +, 8-15 digits, no leading zero. */
 export const MOBILE_NUMBER_REGEX = /^\+?[1-9]\d{7,14}$/;
 
+/**
+ * Indian mobile number: 10 digits starting 6-9. Accepts a +91 / 91 / 0 prefix and common
+ * separators on input and normalises to the bare 10 digits, so the same number can never be
+ * stored two ways (matters for OTP delivery and duplicate checks).
+ */
+export function normalizeIndianMobile(input: string): string | null {
+  const digits = input.replace(/[\s\-()]/g, "").replace(/^\+/, "");
+  const bare = digits.replace(/^(91|0)(?=\d{10}$)/, "");
+  return /^[6-9]\d{9}$/.test(bare) ? bare : null;
+}
+
+export const indianMobileSchema = z
+  .string()
+  .transform((v, ctx) => {
+    const n = normalizeIndianMobile(v);
+    if (!n) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid 10-digit Indian mobile number" });
+      return z.NEVER;
+    }
+    return n;
+  });
+
+/** RECD serial: 3-40 chars, letters/digits and - _ / . only; stored upper-case. */
+export const recdSerialSchema = z
+  .string()
+  .trim()
+  .min(3, "Serial number is too short")
+  .max(40, "Serial number is too long")
+  .regex(/^[A-Za-z0-9][A-Za-z0-9\-_/.]*$/, "Use letters, digits and - _ / . only")
+  .transform((v) => v.toUpperCase());
+
 export const requestOtpSchema = z.object({
   phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
 });
@@ -49,13 +80,49 @@ export const createOrderSchema = z.object({
   orderDate: z.string().datetime().optional(),
   promisedDeliveryDate: z.string().datetime().optional(),
   plannedExhaustHookupType: z.string().optional(),
+  /** Customer's purchase order number. Duplicates for the same customer are rejected unless
+   *  an admin passes allowDuplicatePo, in which case the order is flagged. */
+  poNumber: z.string().trim().min(1, "PO number is required").max(60),
+  poDate: z.string().datetime().optional(),
+  allowDuplicatePo: z.boolean().optional(),
+  /** One serial per physical RECD: exactly `quantity` of them. */
+  recdSerials: z.array(recdSerialSchema),
+}).superRefine((v, ctx) => {
+  if (v.recdSerials.length !== v.quantity) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["recdSerials"], message: `Enter ${v.quantity} RECD serial number(s) - one per unit` });
+  }
+  if (new Set(v.recdSerials).size !== v.recdSerials.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["recdSerials"], message: "Duplicate serial numbers in this order" });
+  }
 });
 
 /** Adds another RECD product to an existing order/site (same order, multiple units). */
 export const addOrderLineItemSchema = z.object({
   productId: z.string(),
   quantity: z.number().int().positive(),
+  /** One serial per unit added. */
+  recdSerials: z.array(recdSerialSchema),
+}).superRefine((v, ctx) => {
+  if (v.recdSerials.length !== v.quantity) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["recdSerials"], message: `Enter ${v.quantity} RECD serial number(s) - one per unit` });
+  }
+  if (new Set(v.recdSerials).size !== v.recdSerials.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["recdSerials"], message: "Duplicate serial numbers" });
+  }
 });
+
+/** Sets the serial on a unit that was created without one (legacy / agent-created). */
+export const setRecdSerialSchema = z.object({ serialNo: recdSerialSchema });
+
+export const createRegionSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+});
+export const updateRegionSchema = z.object({
+  name: z.string().trim().min(2).max(80).optional(),
+  isActive: z.boolean().optional(),
+});
+export const setRegionManagersSchema = z.object({ userIds: z.array(z.string()) });
+export const setSiteRegionSchema = z.object({ regionId: z.string().nullable() });
 
 /**
  * Creates a sibling Order+Site for another RECD delivered to the same physical location -
@@ -65,6 +132,15 @@ export const addOrderLineItemSchema = z.object({
 export const cloneOrderForSiteSchema = z.object({
   productId: z.string(),
   quantity: z.number().int().positive(),
+  /** One serial per unit. */
+  recdSerials: z.array(recdSerialSchema),
+}).superRefine((v, ctx) => {
+  if (v.recdSerials.length !== v.quantity) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["recdSerials"], message: `Enter ${v.quantity} RECD serial number(s) - one per unit` });
+  }
+  if (new Set(v.recdSerials).size !== v.recdSerials.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["recdSerials"], message: "Duplicate serial numbers" });
+  }
 });
 
 export const createStageEventSchema = z.object({
@@ -155,7 +231,7 @@ export const siteCompanyDetailsSchema = z.object({
   dgCapacityKva: z.number().positive(),
   dgModel: z.string().min(1),
   sitePocName: z.string().min(1),
-  sitePocNumber: z.string().min(1),
+  sitePocNumber: indianMobileSchema,
 });
 
 export const createAmcOrderSchema = z.object({
@@ -178,7 +254,8 @@ export const createUserSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   roleKey: z.string(),
-  phone: z.string().optional(),
+  /** Mandatory: it is the contact number for reminders/OTP. Normalised to 10 digits. */
+  phone: indianMobileSchema,
   title: z.string().optional(),
   /** Required when adding an erection engineer who belongs to an approved vendor. */
   vendorId: z.string().optional(),
@@ -188,7 +265,7 @@ export const updateUserSchema = z.object({
   name: z.string().min(1).optional(),
   email: z.string().email().optional(),
   roleKey: z.string().optional(),
-  phone: z.string().optional(),
+  phone: indianMobileSchema.optional(),
   title: z.string().optional(),
 });
 

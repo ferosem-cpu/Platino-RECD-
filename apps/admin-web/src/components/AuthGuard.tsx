@@ -20,6 +20,8 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/users": ["manage_users"],
   "/settings": ["manage_settings"],
   "/amc-orders": ["manage_amc_orders"],
+  "/recd-units": ["view_site_status"],
+  "/regions": ["manage_regions"],
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.

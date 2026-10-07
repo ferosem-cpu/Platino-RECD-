@@ -1,8 +1,9 @@
 import { Router } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { createUserSchema, updateUserSchema, PERMISSION_KEY, ROLE_KEY, VENDOR_STATUS } from "@recd/shared";
-import { asString } from "../lib/params";
+import { createUserSchema, updateUserSchema, PERMISSION_KEY, ROLE_KEY, USER_AUDIT_ACTION, VENDOR_STATUS } from "@recd/shared";
+import { diffFields, logUserAudit } from "../lib/audit";
+import { asOptionalString, asString } from "../lib/params";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 
@@ -17,7 +18,7 @@ function generateTempPassword(): string {
 
 usersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (_req, res) => {
   const users = await prisma.user.findMany({
-    include: { role: true },
+    include: { role: true, regionsManaged: { include: { region: { select: { id: true, name: true } } } } },
     orderBy: { createdAt: "desc" },
   });
   res.json(users.map(({ passwordHash, ...u }) => u));
@@ -54,6 +55,9 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
     if (vendor.status !== VENDOR_STATUS.APPROVED) return res.status(400).json({ error: "Vendor is not approved yet" });
   }
 
+  const phoneTaken = await prisma.user.findUnique({ where: { phone: parsed.data.phone } });
+  if (phoneTaken) return res.status(409).json({ error: "That mobile number is already used by another user" });
+
   const tempPassword = generateTempPassword();
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
@@ -70,6 +74,10 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
       mustChangePassword: true,
       createdById: req.auth!.userId,
     },
+  });
+
+  await logUserAudit(req.auth!.userId, user.id, USER_AUDIT_ACTION.CREATED, {
+    role: role.key, email: user.email, phone: user.phone, vendorId: user.vendorId ?? null,
   });
 
   // Phase 1: return the temp password in the response for the admin to relay manually.
@@ -117,7 +125,11 @@ usersRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (r
   const data: Record<string, unknown> = {};
   if (parsed.data.name !== undefined) data.name = parsed.data.name;
   if (parsed.data.email !== undefined) data.email = parsed.data.email;
-  if (parsed.data.phone !== undefined) data.phone = parsed.data.phone;
+  if (parsed.data.phone !== undefined) {
+    const phoneTaken = await prisma.user.findFirst({ where: { phone: parsed.data.phone, id: { not: id } } });
+    if (phoneTaken) return res.status(409).json({ error: "That mobile number is already used by another user" });
+    data.phone = parsed.data.phone;
+  }
   if (parsed.data.title !== undefined) data.title = parsed.data.title;
 
   if (parsed.data.roleKey !== undefined) {
@@ -136,6 +148,16 @@ usersRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (r
     data,
     include: { role: true },
   });
+
+  const roleChanged = existing.role.key !== updated.role.key;
+  const changes = diffFields(
+    { name: existing.name, email: existing.email, phone: existing.phone, title: existing.title, role: existing.role.key },
+    { name: updated.name, email: updated.email, phone: updated.phone, title: updated.title, role: updated.role.key },
+    ["name", "email", "phone", "title", "role"],
+  );
+  if (changes) {
+    await logUserAudit(req.auth!.userId, id, roleChanged ? USER_AUDIT_ACTION.ROLE_CHANGED : USER_AUDIT_ACTION.UPDATED, changes);
+  }
 
   const { passwordHash, ...safe } = updated;
   res.json(safe);
@@ -174,6 +196,7 @@ usersRouter.put("/:id/deactivate", requirePermission(PERMISSION_KEY.MANAGE_USERS
     data: { isActive: false },
     include: { role: true },
   });
+  await logUserAudit(req.auth!.userId, id, USER_AUDIT_ACTION.DEACTIVATED);
 
   const { passwordHash, ...safe } = updated;
   res.json(safe);
@@ -192,6 +215,7 @@ usersRouter.put("/:id/activate", requirePermission(PERMISSION_KEY.MANAGE_USERS),
     data: { isActive: true },
     include: { role: true },
   });
+  await logUserAudit(req.auth!.userId, id, USER_AUDIT_ACTION.ACTIVATED);
 
   const { passwordHash, ...safe } = updated;
   res.json(safe);
@@ -217,5 +241,25 @@ usersRouter.post("/:id/reset-password", requirePermission(PERMISSION_KEY.MANAGE_
     },
   });
 
+  await logUserAudit(req.auth!.userId, id, USER_AUDIT_ACTION.PASSWORD_RESET);
+
   res.json({ tempPassword });
+});
+
+// ---------------------------------------------------------------------------
+// Audit trail (creation, modification, role changes, deactivation)
+// ---------------------------------------------------------------------------
+
+usersRouter.get("/audit-log", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req, res) => {
+  const userId = asOptionalString(req.query.userId);
+  const rows = await prisma.userAuditLog.findMany({
+    where: userId ? { targetUserId: userId } : {},
+    include: {
+      actor: { select: { id: true, name: true } },
+      target: { select: { id: true, name: true, email: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  res.json(rows);
 });

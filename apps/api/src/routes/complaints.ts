@@ -7,6 +7,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString } from "../lib/params";
+import { managedRegionIds } from "../lib/regions";
 
 export const complaintsRouter = Router();
 complaintsRouter.use(authenticate);
@@ -44,6 +45,10 @@ complaintsRouter.get(
     ) {
       where = { assignedToId: userId };
     }
+    // A Regional Manager only sees tickets for sites in the regions mapped to them.
+    if (!customerId && req.auth!.roleKey === ROLE_KEY.REGIONAL_MANAGER) {
+      where = { site: { regionId: { in: await managedRegionIds(userId, req.auth!.roleKey) } } };
+    }
 
     const complaints = await prisma.complaint.findMany({
       where,
@@ -70,7 +75,7 @@ complaintsRouter.get("/assignees", requirePermission(PERMISSION_KEY.MANAGE_COMPL
   const engineers = await prisma.user.findMany({
     where: {
       isActive: true,
-      role: { key: { in: [ROLE_KEY.ERECTION_ENGINEER, ROLE_KEY.COMMISSIONING_ENGINEER, ROLE_KEY.SERVICE_TEAM] } },
+      role: { key: { in: [ROLE_KEY.ERECTION_ENGINEER, ROLE_KEY.COMMISSIONING_ENGINEER, ROLE_KEY.SERVICE_TEAM, ROLE_KEY.SERVICE_ENGINEER] } },
     },
     select: { id: true, name: true, role: { select: { name: true } } },
     orderBy: { name: "asc" },

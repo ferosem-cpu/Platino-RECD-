@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, STAGE_KEY } from "@recd/shared";
+import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, ROLE_KEY, STAGE_KEY } from "@recd/shared";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
@@ -7,11 +8,24 @@ import { asString } from "../lib/params";
 export const ordersRouter = Router();
 ordersRouter.use(authenticate);
 
+const ADMIN_ROLES_FOR_PO_OVERRIDE: string[] = [ROLE_KEY.SUPER_ADMIN, ROLE_KEY.OWNER_ADMIN, ROLE_KEY.MANAGEMENT];
+
+/** Returns the already-registered serials among `serials` (serials are globally unique). */
+async function findTakenSerials(serials: string[]): Promise<string[]> {
+  if (!serials.length) return [];
+  const rows = await prisma.recdUnit.findMany({ where: { serialNo: { in: serials } }, select: { serialNo: true } });
+  return rows.map((r) => r.serialNo!).filter(Boolean);
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+}
+
 ordersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
   const where = req.auth!.customerId ? { customerId: req.auth!.customerId } : {};
   const orders = await prisma.order.findMany({
     where,
-    include: { customer: true, product: true, site: { include: { currentStage: true } }, lineItems: { include: { product: true } } },
+    include: { customer: true, product: true, site: { include: { currentStage: true } }, lineItems: { include: { product: true } }, units: { select: { id: true, serialNo: true } } },
     orderBy: { createdAt: "desc" },
   });
   res.json(orders);
@@ -27,6 +41,7 @@ ordersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async 
       salesEngineer: { select: { id: true, name: true } },
       site: { include: { currentStage: true, assignedEngineer: true, vendor: true } },
       lineItems: { include: { product: true }, orderBy: { createdAt: "asc" } },
+      units: { include: { product: { select: { id: true, name: true, model: true } } }, orderBy: { createdAt: "asc" } },
     },
   });
   if (!order) return res.status(404).json({ error: "Order not found" });
@@ -50,24 +65,69 @@ ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (r
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
 
+  const taken = await findTakenSerials(data.recdSerials);
+  if (taken.length) {
+    return res.status(409).json({ error: `Serial number already registered: ${taken.join(", ")}` });
+  }
+
+  // Duplicate PO guard: same customer + same PO number. Admins may knowingly override, in
+  // which case the order is flagged so it shows up in review.
+  const dupePo = await prisma.order.findFirst({
+    where: { customerId: data.customerId, poNumber: { equals: data.poNumber, mode: "insensitive" } },
+    select: { orderNumber: true },
+  });
+  let poDuplicateFlag = false;
+  if (dupePo) {
+    const mayOverride = ADMIN_ROLES_FOR_PO_OVERRIDE.includes(req.auth!.roleKey);
+    if (!(data.allowDuplicatePo && mayOverride)) {
+      return res.status(409).json({
+        error: `PO ${data.poNumber} already exists for this customer (order ${dupePo.orderNumber}).` +
+          (mayOverride ? " Tick 'allow duplicate PO' to create it anyway." : " Ask an admin to override if this is intentional."),
+        code: "DUPLICATE_PO",
+      });
+    }
+    poDuplicateFlag = true;
+  }
+
   const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
   const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-  const order = await prisma.order.create({
-    data: {
-      orderNumber,
-      customerId: data.customerId,
-      productId: data.productId,
-      quantity: data.quantity,
-      value: data.value,
-      orderDate: data.orderDate ? new Date(data.orderDate) : undefined,
-      promisedDeliveryDate: data.promisedDeliveryDate ? new Date(data.promisedDeliveryDate) : undefined,
-      plannedExhaustHookupType: data.plannedExhaustHookupType,
-      salesEngineerId: req.auth!.userId,
-      site: { create: { currentStageId: firstStage.id } },
-    },
-    include: { site: true },
-  });
+  let order;
+  try {
+    order = await prisma.order.create({
+      data: {
+        orderNumber,
+        customerId: data.customerId,
+        productId: data.productId,
+        quantity: data.quantity,
+        value: data.value,
+        orderDate: data.orderDate ? new Date(data.orderDate) : undefined,
+        promisedDeliveryDate: data.promisedDeliveryDate ? new Date(data.promisedDeliveryDate) : undefined,
+        plannedExhaustHookupType: data.plannedExhaustHookupType,
+        poNumber: data.poNumber,
+        poDate: data.poDate ? new Date(data.poDate) : undefined,
+        poDuplicateFlag,
+        salesEngineerId: req.auth!.userId,
+        site: { create: { currentStageId: firstStage.id } },
+      },
+      include: { site: true },
+    });
+    await prisma.recdUnit.createMany({
+      data: data.recdSerials.map((serialNo) => ({
+        serialNo,
+        orderId: order!.id,
+        siteId: order!.site?.id,
+        productId: data.productId,
+      })),
+    });
+  } catch (err) {
+    // Lost a race with another request registering the same serial.
+    if (isUniqueViolation(err)) {
+      if (order) await prisma.order.delete({ where: { id: order.id } }).catch(() => undefined);
+      return res.status(409).json({ error: "One of those serial numbers was just registered by someone else" });
+    }
+    throw err;
+  }
 
   res.status(201).json(order);
 });
@@ -86,10 +146,28 @@ ordersRouter.post("/:id/line-items", requirePermission(PERMISSION_KEY.MANAGE_ORD
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  const lineItem = await prisma.orderLineItem.create({
-    data: { orderId, productId: parsed.data.productId, quantity: parsed.data.quantity },
-    include: { product: true },
-  });
+  const taken = await findTakenSerials(parsed.data.recdSerials);
+  if (taken.length) return res.status(409).json({ error: `Serial number already registered: ${taken.join(", ")}` });
+
+  const siteId = (await prisma.site.findUnique({ where: { orderId }, select: { id: true } }))?.id;
+  let lineItem;
+  try {
+    lineItem = await prisma.$transaction(async (tx) => {
+      const li = await tx.orderLineItem.create({
+        data: { orderId, productId: parsed.data.productId, quantity: parsed.data.quantity },
+        include: { product: true },
+      });
+      await tx.recdUnit.createMany({
+        data: parsed.data.recdSerials.map((serialNo) => ({
+          serialNo, orderId, siteId, productId: parsed.data.productId, lineItemId: li.id,
+        })),
+      });
+      return li;
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) return res.status(409).json({ error: "One of those serial numbers was just registered by someone else" });
+    throw err;
+  }
 
   res.status(201).json(lineItem);
 });
@@ -100,7 +178,10 @@ ordersRouter.delete("/:id/line-items/:lineItemId", requirePermission(PERMISSION_
   const lineItem = await prisma.orderLineItem.findUnique({ where: { id: lineItemId } });
   if (!lineItem || lineItem.orderId !== orderId) return res.status(404).json({ error: "Line item not found" });
 
-  await prisma.orderLineItem.delete({ where: { id: lineItemId } });
+  await prisma.$transaction([
+    prisma.recdUnit.deleteMany({ where: { lineItemId } }),
+    prisma.orderLineItem.delete({ where: { id: lineItemId } }),
+  ]);
   res.status(204).end();
 });
 
@@ -139,6 +220,7 @@ ordersRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), asy
       await tx.pendingAction.deleteMany({ where: { siteId } });
       await tx.site.delete({ where: { id: siteId } });
     }
+    await tx.recdUnit.deleteMany({ where: { orderId } });
     await tx.orderLineItem.deleteMany({ where: { orderId } });
     await tx.order.delete({ where: { id: orderId } });
   });
