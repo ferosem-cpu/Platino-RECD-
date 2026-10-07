@@ -100,6 +100,24 @@ const liveLinks = [
   },
 ];
 
+const regionsAndUnitsLinks = [
+  { href: "/recd-units", label: "RECD Units",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+      </svg>
+    ),
+  },
+  { href: "/regions", label: "Regions",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+      </svg>
+    ),
+  },
+];
+
 const phase2Links = [
   {
     label: "Revenue",
@@ -142,6 +160,8 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/reports": ["view_site_status", "manage_orders", "manage_vendors"],
   "/users": ["manage_users"],
   "/amc-orders": ["manage_amc_orders"],
+  "/recd-units": ["view_site_status"],
+  "/regions": ["manage_regions"],
 };
 
 interface NavProps {
@@ -226,7 +246,7 @@ export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
           <p className="px-3 pt-2 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
             Main
           </p>
-          {liveLinks
+          {[...liveLinks, ...regionsAndUnitsLinks]
             .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
             .map((link) => (
               <Link

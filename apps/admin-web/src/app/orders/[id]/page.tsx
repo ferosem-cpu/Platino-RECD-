@@ -25,8 +25,10 @@ interface OrderDetail {
   promisedDeliveryDate: string | null;
   actualDispatchDate: string | null;
   plannedExhaustHookupType: string | null;
-  customerPoNumber: string | null;
-  customerPoDate: string | null;
+  poNumber: string | null;
+  poDate: string | null;
+  poDuplicateFlag: boolean;
+  units: Array<{ id: string; serialNo: string | null; status: string; product: { name: string; model: string } }>;
   customer: {
     id: string;
     name: string;
@@ -64,6 +66,8 @@ export default function OrderDetailPage() {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [pendingSerials, setPendingSerials] = useState<Record<string, string>>({});
+  const [savingUnitId, setSavingUnitId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -84,6 +88,22 @@ export default function OrderDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete order");
       setDeleting(false);
+    }
+  }
+
+  async function saveSerial(unitId: string) {
+    const serialNo = (pendingSerials[unitId] ?? "").trim();
+    if (!serialNo) return;
+    setSavingUnitId(unitId);
+    setError(null);
+    try {
+      await api(`/recd-units/${unitId}/serial`, { method: "PUT", body: JSON.stringify({ serialNo }) });
+      setPendingSerials((p) => ({ ...p, [unitId]: "" }));
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save serial number");
+    } finally {
+      setSavingUnitId(null);
     }
   }
 
@@ -171,10 +191,17 @@ export default function OrderDetailPage() {
             <span className="label">Actual dispatch</span>
             <span className="value">{order.actualDispatchDate ? new Date(order.actualDispatchDate).toLocaleDateString() : "-"}</span>
           </div>
-          {order.customerPoNumber && (
+          <div className="data-card-row">
+            <span className="label">Customer PO</span>
+            <span className="value" data-testid="order-po">
+              {order.poNumber ?? "—"}
+              {order.poDuplicateFlag && <span className="badge badge-accent ml-2" title="Created as a duplicate PO by an admin">duplicate PO</span>}
+            </span>
+          </div>
+          {order.poDate && (
             <div className="data-card-row">
-              <span className="label">Customer PO</span>
-              <span className="value">{order.customerPoNumber}</span>
+              <span className="label">PO date</span>
+              <span className="value">{new Date(order.poDate).toLocaleDateString()}</span>
             </div>
           )}
         </section>
@@ -214,6 +241,44 @@ export default function OrderDetailPage() {
           )}
         </section>
       </div>
+
+      <section className="card p-5 space-y-3" data-testid="order-units">
+        <h2 className="text-sm font-semibold">RECD units ({order.units.length})</h2>
+        <p className="text-xs text-gray-400">
+          Every physical RECD has its own unique serial number. Service tickets, reports, AMC and warranty are tracked against it.
+        </p>
+        {order.units.length === 0 && <p className="text-sm text-gray-400">No units recorded.</p>}
+        <div className="divide-y divide-gray-100">
+          {order.units.map((u) => (
+            <div key={u.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <span className="text-sm text-gray-700">{u.product.name} ({u.product.model})</span>
+              {u.serialNo ? (
+                <span className="font-mono text-xs font-semibold">{u.serialNo}</span>
+              ) : canManage ? (
+                <span className="flex items-center gap-2">
+                  <span className="badge badge-accent">serial pending</span>
+                  <input
+                    className="field font-mono text-xs w-44"
+                    placeholder="Enter serial no."
+                    value={pendingSerials[u.id] ?? ""}
+                    onChange={(e) => setPendingSerials((p) => ({ ...p, [u.id]: e.target.value }))}
+                  />
+                  <button
+                    type="button"
+                    disabled={savingUnitId === u.id || !(pendingSerials[u.id] ?? "").trim()}
+                    onClick={() => saveSerial(u.id)}
+                    className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
+                  >
+                    {savingUnitId === u.id ? "Saving…" : "Save"}
+                  </button>
+                </span>
+              ) : (
+                <span className="badge badge-accent">serial pending</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section>
         <div className="flex items-center justify-between mb-2">

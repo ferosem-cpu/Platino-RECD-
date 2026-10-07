@@ -120,8 +120,19 @@ async function executeConfirmedAction(
           promisedDeliveryDate: input.promisedDeliveryDate ? new Date(String(input.promisedDeliveryDate)) : undefined,
           plannedExhaustHookupType: (input.plannedExhaustHookupType as string | null) ?? undefined,
           salesEngineerId: userId,
+          // The agent has no way to know physical serials: units are created "serial pending"
+          // (serialNo null) and show up under /recd-units?pending=1 until staff enter them.
           site: { create: { currentStageId: firstStage.id } },
+          poNumber: (input.poNumber as string | null) ?? undefined,
         },
+        include: { site: true },
+      });
+      await prisma.recdUnit.createMany({
+        data: Array.from({ length: Math.max(1, Number(input.quantity)) }, () => ({
+          orderId: order.id,
+          siteId: order.site?.id,
+          productId: String(input.productId),
+        })),
       });
       return order.id;
     }

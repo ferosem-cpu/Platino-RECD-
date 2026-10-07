@@ -57,6 +57,12 @@ export const ROLE_KEY = {
   SERVICE_TEAM: "service_team",
   FINANCE: "finance",
   CUSTOMER: "customer",
+  /** Field service engineer - works tickets assigned to them. */
+  SERVICE_ENGINEER: "service_engineer",
+  /** Runs the service desk company-wide (distinct from the region-scoped Regional Manager). */
+  SERVICE_MANAGER: "service_manager",
+  /** Owns service activity for one or more Regions (see Region / RegionManager). */
+  REGIONAL_MANAGER: "regional_manager",
 } as const;
 export type RoleKey = (typeof ROLE_KEY)[keyof typeof ROLE_KEY];
 
@@ -77,6 +83,8 @@ export const PERMISSION_KEY = {
   MANAGE_VENDORS: "manage_vendors",
   /** Create/view AMC (Annual Maintenance Contract) orders. */
   MANAGE_AMC_ORDERS: "manage_amc_orders",
+  /** Create/rename/deactivate Regions and map Regional Managers to them. */
+  MANAGE_REGIONS: "manage_regions",
 } as const;
 export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];
 
@@ -223,3 +231,30 @@ export const AMC_TYPE_LABELS: Record<string, string> = {
   [AMC_TYPE.CAMC]: "CAMC (Comprehensive)",
   [AMC_TYPE.NAMC]: "NAMC (Non-Comprehensive)",
 };
+
+/** RECD unit lifecycle. A unit is one physical RECD; an order can carry several. */
+export const RECD_UNIT_STATUS = {
+  ACTIVE: "active",
+  /** Unit swapped out / scrapped - keeps its serial reserved so it can't be reused. */
+  RETIRED: "retired",
+} as const;
+export type RecdUnitStatus = (typeof RECD_UNIT_STATUS)[keyof typeof RECD_UNIT_STATUS];
+
+/** Who is raising a ticket - the registered customer, or someone further down the chain. */
+export const REPORTER_TYPE = {
+  CUSTOMER: "customer",
+  RESELLER: "reseller",
+  RE_RESELLER: "re_reseller",
+  OTHER: "other",
+} as const;
+export type ReporterType = (typeof REPORTER_TYPE)[keyof typeof REPORTER_TYPE];
+
+export const USER_AUDIT_ACTION = {
+  CREATED: "created",
+  UPDATED: "updated",
+  ROLE_CHANGED: "role_changed",
+  DEACTIVATED: "deactivated",
+  ACTIVATED: "activated",
+  PASSWORD_RESET: "password_reset",
+} as const;
+export type UserAuditAction = (typeof USER_AUDIT_ACTION)[keyof typeof USER_AUDIT_ACTION];

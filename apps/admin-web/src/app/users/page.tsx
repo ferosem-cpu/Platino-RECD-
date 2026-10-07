@@ -14,6 +14,24 @@ interface UserRow {
   isActive: boolean;
 }
 
+interface AuditRow {
+  id: string;
+  action: string;
+  createdAt: string;
+  changes: Record<string, unknown> | null;
+  actor: { id: string; name: string } | null;
+  target: { id: string; name: string; email: string | null };
+}
+
+const AUDIT_LABELS: Record<string, string> = {
+  created: "Created",
+  updated: "Edited",
+  role_changed: "Role changed",
+  deactivated: "Deactivated",
+  activated: "Reactivated",
+  password_reset: "Password reset",
+};
+
 interface RoleOption {
   id: string;
   key: string;
@@ -84,7 +102,15 @@ export default function UsersPage() {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetResult, setResetResult] = useState<string | null>(null);
 
+  const [audit, setAudit] = useState<AuditRow[]>([]);
+  const [showAudit, setShowAudit] = useState(false);
+
+  function loadAudit() {
+    api<AuditRow[]>("/users/audit-log").then(setAudit).catch(() => {});
+  }
+
   function load() {
+    loadAudit();
     api<UserRow[]>("/users").then(setUsers).catch(() => {});
     // "customer" is deliberately excluded - customer logins must be created as a contact on a
     // Customer record (which sets User.customerId), not through this generic staff-add-user
@@ -190,6 +216,7 @@ export default function UsersPage() {
         method: "POST",
       });
       setResetResult(result.tempPassword);
+      loadAudit();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reset password");
       setResetUser(null);
@@ -246,11 +273,16 @@ export default function UsersPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Phone</label>
+            <label className="block text-xs text-gray-500 mb-1">Mobile no.</label>
             <input
+              required
+              type="tel"
+              inputMode="numeric"
+              pattern="(\+?91|0)?[6-9][0-9]{9}"
+              title="10-digit Indian mobile number"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
               value={form.phone}
-              placeholder="Optional"
+              placeholder="10-digit mobile"
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
             />
           </div>
@@ -342,7 +374,7 @@ export default function UsersPage() {
           { key: "name", label: "Name", accessor: (u) => u.name, filterType: "text", alwaysVisible: true },
           { key: "title", label: "Title", accessor: (u) => u.title ?? "" },
           { key: "email", label: "Email", accessor: (u) => u.email ?? "", filterType: "text" },
-          { key: "phone", label: "Phone", accessor: (u) => u.phone ?? "", filterType: "text" },
+          { key: "phone", label: "Mobile no.", accessor: (u) => u.phone ?? "", filterType: "text" },
           {
             key: "role",
             label: "Role",
@@ -506,8 +538,13 @@ export default function UsersPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Phone</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Mobile no.</label>
                   <input
+                    required
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="(\+?91|0)?[6-9][0-9]{9}"
+                    title="10-digit Indian mobile number"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
                     value={editForm.phone}
                     onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
@@ -597,6 +634,41 @@ export default function UsersPage() {
           </div>
         </div>
       )}
+
+      {/* ── Audit trail ───────────────────────────────────────────────── */}
+      <section className="card p-4 sm:p-5 print:hidden" data-testid="user-audit">
+        <button type="button" onClick={() => setShowAudit((v) => !v)} className="flex w-full items-center justify-between text-left">
+          <h2 className="text-sm font-semibold">User change history</h2>
+          <span className="text-xs text-gray-400">{showAudit ? "Hide" : `Show (${audit.length})`}</span>
+        </button>
+        {showAudit && (
+          <ul className="mt-3 divide-y divide-gray-100 text-sm">
+            {audit.length === 0 && <li className="py-2 text-gray-400">No changes recorded yet.</li>}
+            {audit.map((a) => (
+              <li key={a.id} className="py-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span>
+                    <span className="font-medium">{AUDIT_LABELS[a.action] ?? a.action}</span>{" "}
+                    <span className="text-gray-700">{a.target.name}</span>
+                    <span className="text-gray-400"> by {a.actor?.name ?? "system"}</span>
+                  </span>
+                  <span className="text-xs text-gray-400">{new Date(a.createdAt).toLocaleString()}</span>
+                </div>
+                {a.changes && (
+                  <p className="mt-0.5 text-xs text-gray-500 break-words">
+                    {Object.entries(a.changes).map(([k, v]) => {
+                      const d = v as { from?: unknown; to?: unknown } | unknown;
+                      return typeof d === "object" && d !== null && "to" in (d as object)
+                        ? `${k}: ${String((d as { from?: unknown }).from ?? "—")} → ${String((d as { to?: unknown }).to ?? "—")}`
+                        : `${k}: ${String(d ?? "—")}`;
+                    }).join(" · ")}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* ── Reset Password Modal ──────────────────────────────────────── */}
       {resetUser && (

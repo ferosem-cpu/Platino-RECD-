@@ -658,3 +658,23 @@ wait on them. Deliberately left blank for now per the business's own call; revis
 **Immediate next step:** push, then verify the production URLs load and staff/customer login both
 work (the local smoke test in §24.7/§24.8 covered this against localhost + the Supabase DB
 directly - production has not yet been checked end-to-end against the deployed Vercel functions).
+
+## 25. Service module phase 1 - regions, per-unit RECD serials, PO number, user audit (2026-10-07, branch `feature/service-module-phase1`)
+
+**Source:** `New_Service_Web_Platino_correctionsV1.0.docx` (Field Sense / Service module, 11 requirements). This phase covers items 1, 2, 9, 10 and the data foundations for 3, 6, 7, 8, 11. Decisions from the business: serial number is **unique per physical RECD** (an order can hold several); no SMS provider - WhatsApp stays a provider slot to connect later; Regional Manager role + admin-defined regions.
+
+**Migration `20261007120000_service_module_phase1` (idempotent for roles/permissions; NOT yet applied to production):**
+- `RecdUnit` (one row per physical RECD, `serialNo` globally unique, nullable only for legacy "serial pending" units; `lineItemId` ties a unit to its extra product line). **Backfill:** one unit per existing order unit; the first unit of each order takes the order number as its serial (that is what customers already log in with, see §20), all other units are "serial pending" until staff enter them on the order page or `/recd-units?pending=1`.
+- `Region` + `RegionManager` (many managers per region), `Site.regionId`.
+- `Order.poNumber/poDate/poDuplicateFlag`; duplicate PO for the same customer is rejected (409 `DUPLICATE_PO`) unless an admin passes `allowDuplicatePo`, which flags the order.
+- `UserAuditLog` (create/edit/role change/deactivate/activate/password reset; never stores password material).
+- New permission `manage_regions` (super_admin, owner_admin, management) and roles `regional_manager`, `service_manager`, `service_engineer`, all inserted by the migration - prod never re-runs the seed (see §21).
+- RLS enabled, zero policies, on the four new tables (same posture as every other table).
+
+**API:** `/regions` (CRUD + `PUT /:id/managers`), `/recd-units` (list/search, `PUT /:id/serial` write-once), `PUT /sites/:id/region`, `GET /users/audit-log`; `POST /orders`, `POST /orders/:id/line-items` and `POST /sites/:id/clone-order` now require one distinct serial per unit and a PO number (clone inherits the PO). Mobile numbers are validated/normalised to 10 digits (`indianMobileSchema`) - mandatory on user create, and on `sitePocNumber`. A Regional Manager's complaint list is scoped to their regions. Agent-created orders (confirm-gated `create_order`) create "serial pending" units because the agent cannot know physical serials.
+
+**Admin UI:** PO + per-unit serial fields on New order; PO/serial columns on Orders; units block on the order page (set pending serials); serials + region on the site page; new `/regions` and `/recd-units` pages; mandatory mobile on Users + "User change history" panel. Removed the stale `customerPoNumber/customerPoDate` references on the order page (those fields never existed in this repo's schema; Zan-APP leftovers).
+
+**Verification:** `packages/shared` unit tests (8, `npm test --workspace=packages/shared`); `tsc` clean for shared and admin-web; migration applied to a throwaway Postgres 16 on top of all earlier migrations with sample legacy orders (multi-quantity + line items) and the backfill checked row by row. **Not verified:** `apps/api` typecheck against generated Prisma types and `next build` - the sandbox could not download Prisma engines or Google Fonts (network allowlist); the API typechecks with only the missing-Prisma-client errors. Run `npm ci && npm run build` locally before merging. No click-test against a real DB yet.
+
+**Next (phases 2-5):** public complaint by serial + mobile + OTP (hashed OTP, rate limits, WhatsApp Cloud API provider slot, reporter type reseller/re-reseller), one-open-ticket-per-unit, reminder/escalation engine, vendor vs customer AMC + warranty status, signed digital service/AMC reports, ticket SLA escalation.
