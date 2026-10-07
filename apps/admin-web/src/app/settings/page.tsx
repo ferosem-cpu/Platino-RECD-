@@ -17,6 +17,7 @@ import { extractDominantColors, colorsToTheme } from "@/lib/colorExtractor";
 import { api } from "@/lib/apiClient";
 import AgentProvidersSettings from "@/components/AgentProvidersSettings";
 import AgentVisibilitySettings from "@/components/AgentVisibilitySettings";
+import SlaSettings from "@/components/SlaSettings";
 
 interface CompanyLetterhead {
   legalName: string;
@@ -470,6 +471,7 @@ export default function SettingsPage() {
         </section>
       )}
 
+      <SlaSettings />
       <AgentVisibilitySettings />
       <AgentProvidersSettings />
     </div>

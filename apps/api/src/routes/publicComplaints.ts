@@ -6,16 +6,17 @@ import {
   publicOtpVerifySchema,
   publicComplaintSchema,
   COMPLAINT_SOURCE,
+  COMPLAINT_EVENT,
   COMPLAINT_STATUS,
   COMPLAINT_CATEGORY,
   ISSUE_CATEGORY,
   ISSUE_CATEGORY_LABELS,
   PUBLIC_OTP,
-  ROLE_KEY,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
+import { logComplaintEvent } from "../lib/ticketEvents";
+import { notifyMany, ticketRecipients } from "../lib/ticketNotify";
 import { rateLimit } from "../middleware/rateLimit";
-import { send as sendNotification } from "../services/notifications/notificationService";
 import {
   checkOtpAttemptable,
   clientIp,
@@ -271,35 +272,26 @@ publicComplaintsRouter.post("/", async (req, res) => {
   }
   if (!complaint) return res.status(500).json({ error: "Could not create the ticket. Please try again." });
 
-  // Tell the service desk and the Regional Manager(s) of the site's region. Best effort.
+  await logComplaintEvent({
+    complaintId: complaint.id,
+    type: COMPLAINT_EVENT.CREATED,
+    toValue: complaint.status,
+    actorLabel: `${d.reporterName} (public, ${d.reporterType})`,
+    detail: { source: COMPLAINT_SOURCE.PUBLIC, reporterPhone: otp.phone },
+  });
+
+  // Service desk, Service Managers, Management and the site region's Regional Managers.
   try {
-    const recipients = await prisma.user.findMany({
-      where: {
-        isActive: true,
-        OR: [
-          { role: { key: { in: [ROLE_KEY.SERVICE_TEAM, ROLE_KEY.SERVICE_MANAGER] } } },
-          ...(unit.site?.regionId ? [{ regionsManaged: { some: { regionId: unit.site.regionId } } }] : []),
-        ],
-      },
-      select: { id: true },
+    const recipients = await ticketRecipients("raised", { regionId: unit.site?.regionId });
+    await notifyMany(recipients, "complaint_raised", {
+      ticketNumber: complaint.ticketNumber,
+      serialNo: unit.serialNo,
+      source: COMPLAINT_SOURCE.PUBLIC,
+      reporterName: d.reporterName,
+      reporterType: d.reporterType,
+      reporterPhone: otp.phone,
+      issue: ISSUE_CATEGORY_LABELS[d.issueCategory],
     });
-    await Promise.all(
-      recipients.map((u) =>
-        sendNotification({
-          recipientId: u.id,
-          templateKey: "complaint_raised",
-          data: {
-            ticketNumber: complaint!.ticketNumber,
-            serialNo: unit.serialNo,
-            source: COMPLAINT_SOURCE.PUBLIC,
-            reporterName: d.reporterName,
-            reporterType: d.reporterType,
-            reporterPhone: otp.phone,
-            issue: ISSUE_CATEGORY_LABELS[d.issueCategory],
-          },
-        }).catch((err) => console.error("Notification failed", err)),
-      ),
-    );
   } catch (err) {
     console.error("Public complaint notification failed", err);
   }

@@ -25,6 +25,53 @@ interface ComplaintRow {
   reporterName?: string | null;
   reporterPhone?: string | null;
   reporterType?: string | null;
+  slaEscalationLevel?: number;
+  /** null on tickets that predate SLA tracking (their level was pre-set to avoid an alert flood). */
+  lastEscalatedAt?: string | null;
+}
+
+interface TicketEvent {
+  id: string;
+  type: string;
+  fromValue: string | null;
+  toValue: string | null;
+  actorLabel: string | null;
+  actor: { name: string } | null;
+  createdAt: string;
+}
+
+function eventText(e: TicketEvent): string {
+  const p = (v: string | null) => (v ?? "—").replace(/_/g, " ");
+  if (e.type === "created") return "Ticket raised";
+  if (e.type === "status_changed") return `Status: ${p(e.fromValue)} → ${p(e.toValue)}`;
+  if (e.type === "assigned") return e.toValue ? "Assigned to an engineer" : "Unassigned";
+  if (e.type === "escalated") return e.toValue === "2" ? "Escalated to Management (SLA)" : "Escalated to Regional Manager (SLA)";
+  return e.type;
+}
+
+function TicketHistory({ id }: { id: string }) {
+  const [events, setEvents] = useState<TicketEvent[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    api<{ events: TicketEvent[] }>(`/complaints/${id}/history`)
+      .then((r) => live && setEvents(r.events))
+      .catch(() => live && setEvents([]));
+    return () => { live = false; };
+  }, [id]);
+  if (!events?.length) return null;
+  return (
+    <div className="mb-4" data-testid="ticket-history">
+      <p className="mb-1 text-xs font-medium text-gray-500">History</p>
+      <ul className="space-y-1 rounded-lg border border-gray-100 bg-gray-50 p-3 text-xs text-gray-600">
+        {events.map((e) => (
+          <li key={e.id} className="flex justify-between gap-3">
+            <span>{eventText(e)}{(e.actor?.name || e.actorLabel) && <span className="text-gray-400"> · {e.actor?.name ?? e.actorLabel}</span>}</span>
+            <span className="shrink-0 text-gray-400">{new Date(e.createdAt).toLocaleString()}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -211,6 +258,11 @@ export default function ComplaintsPage() {
                   <td className="px-4 py-3">
                     {c.site?.order.customer.name ?? "—"}
                     {c.unit?.serialNo && <div className="font-mono text-[11px] text-gray-500">S/N {c.unit.serialNo}</div>}
+                    {(c.slaEscalationLevel ?? 0) > 0 && c.lastEscalatedAt && !["resolved", "closed"].includes(c.status) && (
+                      <div className="text-[11px] font-semibold text-red-600">
+                        SLA breached · {c.slaEscalationLevel === 2 ? "Management" : "Regional Manager"} alerted
+                      </div>
+                    )}
                     {c.source === "public" && (
                       <div className="text-[11px] text-amber-700">
                         Public · {c.reporterName} ({pretty(c.reporterType ?? "")}) {c.reporterPhone}
@@ -320,6 +372,8 @@ export default function ComplaintsPage() {
                 <p className="mt-1 text-[11px] text-gray-400">Customer-submitted photo — click to view full size</p>
               </a>
             )}
+
+            <TicketHistory id={editing.id} />
 
             <form onSubmit={save} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

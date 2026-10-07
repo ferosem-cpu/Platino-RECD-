@@ -5,6 +5,7 @@ import { authRouter } from "./routes/auth";
 import { ordersRouter } from "./routes/orders";
 import { sitesRouter } from "./routes/sites";
 import { complaintsRouter } from "./routes/complaints";
+import { complaintCronRouter } from "./routes/complaintCron";
 import { pendingActionsRouter } from "./routes/pendingActions";
 import { dashboardRouter } from "./routes/dashboard";
 import { usersRouter } from "./routes/users";
@@ -36,6 +37,7 @@ app.use("/customers", customersRouter);
 app.use("/products", productsRouter);
 app.use("/vendors", vendorsRouter);
 app.use("/sites", sitesRouter);
+app.use("/complaints/cron", complaintCronRouter); // before the authenticated router
 app.use("/complaints", complaintsRouter);
 app.use("/pending-actions", pendingActionsRouter);
 app.use("/dashboard", dashboardRouter);
