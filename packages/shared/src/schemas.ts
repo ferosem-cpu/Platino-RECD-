@@ -207,6 +207,9 @@ export const upsertRecdDeliverySchema = z.object({
 
 export const createComplaintSchema = z.object({
   siteId: z.string(),
+  /** Specific RECD the ticket is about (must belong to siteId). When set, the one-open-ticket
+   *  rule applies per unit instead of per site. */
+  unitId: z.string().optional(),
   category: z.string(),
   issueCategory: z.string().optional(),
   description: z.string().min(1),
@@ -324,4 +327,34 @@ export const archiveVendorSchema = z.object({
 export const assignSiteVendorSchema = z.object({
   vendorId: z.string().nullable(),
   assignedEngineerId: z.string().nullable().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Public complaint flow: RECD serial number + mobile number + OTP (no login)
+// ---------------------------------------------------------------------------
+
+export const publicOtpRequestSchema = z.object({
+  serialNo: recdSerialSchema,
+  phone: indianMobileSchema,
+});
+
+export const publicOtpVerifySchema = z.object({
+  serialNo: recdSerialSchema,
+  phone: indianMobileSchema,
+  code: z.string().regex(/^\d{6}$/, "Enter the 6-digit code"),
+});
+
+export const publicComplaintSchema = z.object({
+  /** Single-use token returned by a successful OTP verification. */
+  sessionToken: z.string().min(32).max(128),
+  reporterName: z.string().trim().min(2, "Enter your name").max(80),
+  reporterType: z.enum(["customer", "reseller", "re_reseller", "other"]),
+  issueCategory: z.string().min(1),
+  description: z.string().trim().min(10, "Describe the problem (at least 10 characters)").max(2000),
+  /** Optional photo of the RECD/DG nameplate or the fault - image data URL, max ~6 MB. */
+  attachmentUrl: z
+    .string()
+    .max(8_000_000)
+    .regex(/^data:image\/(png|jpe?g|webp);base64,/, "Attach a PNG, JPG or WebP image")
+    .optional(),
 });

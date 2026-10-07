@@ -37,6 +37,26 @@ export function renderEmail(templateKey: string, data: Record<string, unknown>):
     };
   }
 
+  if (templateKey === "complaint_raised") {
+    const ticket = String(data.ticketNumber ?? "");
+    const lines = [
+      data.serialNo ? `RECD serial no.: ${data.serialNo}` : null,
+      data.issue ? `Issue: ${data.issue}` : null,
+      data.reporterName
+        ? `Reported by: ${data.reporterName}${data.reporterType ? ` (${String(data.reporterType).replace("_", "-")})` : ""}${data.reporterPhone ? `, ${data.reporterPhone}` : ""}`
+        : null,
+    ].filter((l): l is string => Boolean(l));
+    return {
+      subject: `${BRAND} — new service ticket ${ticket}`,
+      text: `A new service ticket has been raised: ${ticket}\n\n${lines.join("\n")}`,
+      html: wrap(`
+        <p>A new service ticket has been raised:</p>
+        <p style="font-size: 18px; font-weight: 700; color: #111827; margin: 12px 0 4px;">${escapeHtml(ticket)}</p>
+        ${lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("")}
+      `),
+    };
+  }
+
   if (templateKey === "site_stage_updated") {
     const stage = String(data.stage ?? "");
     const status = String(data.status ?? "");

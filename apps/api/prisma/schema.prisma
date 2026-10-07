@@ -538,6 +538,21 @@ model Complaint {
   serviceReportUrl String?
   createdAt      DateTime  @default(now())
   closedAt       DateTime?
+
+  /// The physical RECD this ticket is about. At most one open ticket per unit (enforced by a
+  /// partial unique index in the migration, which Prisma cannot express). Null on legacy tickets.
+  unitId         String?
+  unit           RecdUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  /// portal (registered customer) | public (serial + mobile + OTP) - see COMPLAINT_SOURCE
+  source         String    @default("portal")
+  /// Who actually reported it. For public tickets this is a reseller / re-reseller / other person,
+  /// not the registered customer (customerId is always the unit's registered customer).
+  reporterName   String?
+  reporterPhone  String?
+  reporterType   String?
+  reporterVerifiedAt DateTime?
+
+  @@index([unitId])
 }
 
 // ---------------------------------------------------------------------------
@@ -735,8 +750,45 @@ model RecdUnit {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  complaints Complaint[]
+
   @@index([orderId])
   @@index([siteId])
+}
+
+// ---------------------------------------------------------------------------
+// Public (login-free) complaint OTPs: serial + mobile + one-time code
+// ---------------------------------------------------------------------------
+
+model PublicOtp {
+  id            String    @id @default(cuid())
+  /// 10-digit normalised mobile the code was (or would have been) sent to
+  phone         String
+  /// Upper-cased serial exactly as typed - kept even when it matches no unit, so attempts on
+  /// unknown serials are rate-limited and indistinguishable from real ones.
+  serialNorm    String
+  /// Null when the serial matched no active unit (nothing was sent).
+  unitId        String?
+  /// HMAC of the code - the code itself is never stored.
+  codeHash      String
+  expiresAt     DateTime
+  attempts      Int       @default(0)
+  /// Set when the correct code was entered.
+  verifiedAt    DateTime?
+  /// SHA-256 of the single-use token handed back after verification.
+  sessionHash   String?    @unique
+  sessionExpiresAt DateTime?
+  sessionUsedAt DateTime?
+  /// whatsapp | dev | none (unknown serial)
+  deliveryChannel String   @default("none")
+  /// sent | failed | skipped
+  deliveryStatus  String   @default("skipped")
+  ip            String?
+  createdAt     DateTime  @default(now())
+
+  @@index([phone, createdAt])
+  @@index([serialNorm, createdAt])
+  @@index([ip, createdAt])
 }
 
 // ---------------------------------------------------------------------------

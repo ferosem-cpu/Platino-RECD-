@@ -55,6 +55,7 @@ complaintsRouter.get(
       include: {
         site: { include: { order: { include: { customer: true } } } },
         assignedTo: { select: { id: true, name: true } },
+        unit: { select: { id: true, serialNo: true } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -100,9 +101,20 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
     return res.status(403).json({ error: "You can only raise complaints for your own sites" });
   }
 
-  // Only one complaint may be open against a given RECD serial number (site) at a time.
+  // Only one complaint may be open against a given RECD at a time. With a unitId that is the
+  // specific unit; without one (older clients) it falls back to the whole site.
+  let unitId: string | undefined;
+  if (parsed.data.unitId) {
+    const unit = await prisma.recdUnit.findUnique({ where: { id: parsed.data.unitId } });
+    if (!unit || unit.siteId !== parsed.data.siteId) {
+      return res.status(400).json({ error: "That RECD does not belong to this site" });
+    }
+    unitId = unit.id;
+  }
   const openComplaint = await prisma.complaint.findFirst({
-    where: { siteId: parsed.data.siteId, status: { notIn: CLOSED_COMPLAINT_STATUSES } },
+    where: unitId
+      ? { unitId, status: { notIn: CLOSED_COMPLAINT_STATUSES } }
+      : { siteId: parsed.data.siteId, status: { notIn: CLOSED_COMPLAINT_STATUSES } },
   });
   if (openComplaint) {
     return res.status(400).json({
@@ -116,6 +128,7 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
       ticketNumber,
       customerId: req.auth!.customerId,
       siteId: parsed.data.siteId,
+      unitId,
       category: parsed.data.category,
       issueCategory: parsed.data.issueCategory,
       description: parsed.data.description,
