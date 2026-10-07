@@ -678,3 +678,32 @@ directly - production has not yet been checked end-to-end against the deployed V
 **Verification:** `packages/shared` unit tests (8, `npm test --workspace=packages/shared`); `tsc` clean for shared and admin-web; migration applied to a throwaway Postgres 16 on top of all earlier migrations with sample legacy orders (multi-quantity + line items) and the backfill checked row by row. **Not verified:** `apps/api` typecheck against generated Prisma types and `next build` - the sandbox could not download Prisma engines or Google Fonts (network allowlist); the API typechecks with only the missing-Prisma-client errors. Run `npm ci && npm run build` locally before merging. No click-test against a real DB yet.
 
 **Next (phases 2-5):** public complaint by serial + mobile + OTP (hashed OTP, rate limits, WhatsApp Cloud API provider slot, reporter type reseller/re-reseller), one-open-ticket-per-unit, reminder/escalation engine, vendor vs customer AMC + warranty status, signed digital service/AMC reports, ticket SLA escalation.
+
+## 26. Service module – Phase 2: public complaint via serial + mobile + OTP
+
+**Branch:** `feature/service-module-phase2` (stacked on phase 1 / PR #4). **Migration:** `20261007180000_public_complaint_otp` – NOT applied to production; apply before deploying the API.
+
+### What it does
+Anyone holding a RECD serial (owner, reseller, re-reseller – they may not be the registered customer) can raise a service ticket at `/report-issue` (public, no login):
+1. Enter serial + mobile → `POST /public/complaints/otp/request`
+2. Enter 6-digit OTP → `POST /public/complaints/otp/verify` → single-use session token (15 min)
+3. Enter name, relationship, issue, description, optional photo → `POST /public/complaints` → ticket number.
+
+The ticket is linked to the unit (`Complaint.unitId`), its customer and site, `source = "public"`, with reporter name/phone/type and verification time. Service team, Service Managers and the site region's Regional Managers are notified (`complaint_raised`, in-app + email).
+
+### Rules enforced
+- One open ticket per RECD unit (partial unique index `Complaint_one_open_per_unit` + friendly 409; authenticated route also accepts `unitId`).
+- OTP: HMAC-hashed, 5-min expiry, 5 attempts then locked, 30 s resend cooldown, limits 5/mobile, 10/serial, 20/IP per hour (DB-backed, serverless-safe).
+- Responses never reveal whether a serial exists or any customer/site data; unknown serials get the same reply and no message is sent.
+
+### Delivery – "build now, connect later"
+`apps/api/src/lib/otpDelivery.ts`. Until WhatsApp is configured the feature is OFF in production (request-otp returns 503). Set on the API project:
+`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, optional `WHATSAPP_OTP_TEMPLATE_NAME` (default `recd_otp`), `WHATSAPP_TEMPLATE_LANG` (`en`), `WHATSAPP_API_VERSION` (`v21.0`).
+Create a Meta **authentication** template named `recd_otp` with a copy-code button. Non-production uses a console provider; `PUBLIC_OTP_DEV_ECHO=1` echoes the code in the API response (never honoured on Vercel production).
+Failed deliveries are visible in `PublicOtp.deliveryStatus`.
+
+### Tests
+`npm test --workspace=apps/api` (OTP hashing, expiry/lockout, throttling, payload, prod-safety of dev channel).
+
+### Not yet done (later phases)
+Reminder/escalation engine, AMC vendor/customer dates + renewals, warranty status, signed service reports, ticket SLA escalation.

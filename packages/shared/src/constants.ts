@@ -258,3 +258,28 @@ export const USER_AUDIT_ACTION = {
   PASSWORD_RESET: "password_reset",
 } as const;
 export type UserAuditAction = (typeof USER_AUDIT_ACTION)[keyof typeof USER_AUDIT_ACTION];
+
+/** Where a ticket came from. */
+export const COMPLAINT_SOURCE = {
+  /** Registered customer logged into the portal. */
+  PORTAL: "portal",
+  /** Anyone (owner, reseller, re-reseller...) via serial number + mobile + OTP. */
+  PUBLIC: "public",
+} as const;
+export type ComplaintSource = (typeof COMPLAINT_SOURCE)[keyof typeof COMPLAINT_SOURCE];
+
+export const REPORTER_TYPE_LABELS: Record<string, string> = {
+  [REPORTER_TYPE.CUSTOMER]: "Owner / end customer",
+  [REPORTER_TYPE.RESELLER]: "Reseller",
+  [REPORTER_TYPE.RE_RESELLER]: "Re-reseller",
+  [REPORTER_TYPE.OTHER]: "Other",
+};
+
+/** Public OTP policy - shared so the UI countdowns match the server. */
+export const PUBLIC_OTP = {
+  CODE_LENGTH: 6,
+  EXPIRY_SECONDS: 300,
+  RESEND_COOLDOWN_SECONDS: 30,
+  MAX_VERIFY_ATTEMPTS: 5,
+  SESSION_SECONDS: 900,
+} as const;

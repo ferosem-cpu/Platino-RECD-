@@ -351,6 +351,10 @@ export default function LoginPage() {
             )}
           </div>
         )}
+
+        <p className="mt-6 text-center text-xs text-gray-400">
+          Have a problem with your RECD? <a href="/report-issue" className="font-medium text-[var(--theme-accent)]" data-testid="report-issue-link">Report an issue</a>
+        </p>
       </div>
     </div>
   );

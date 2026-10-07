@@ -7,6 +7,9 @@ import Nav from "./Nav";
 import BottomNav from "./BottomNav";
 import AgentChatBubble from "./AgentChatBubble";
 
+/** Standalone pages that need no sign-in (no sidebar, no auth redirects). */
+const PUBLIC_PATHS = ["/vendor/register", "/report-issue"];
+
 // Each protected route lists the permissions that grant access. Holding ANY of them is enough.
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/dashboard": ["view_dashboard"],
@@ -81,7 +84,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (loading) return;
-    if (pathname === "/vendor/register") return; // public page - no auth handling
+    if (PUBLIC_PATHS.includes(pathname)) return; // public pages - no auth handling
 
     if (!user) {
       if (pathname !== "/login") router.push("/login");
@@ -125,7 +128,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   // Public, standalone page (no sidebar, no auth) so external vendors can self-register.
-  if (pathname === "/vendor/register") {
+  if (PUBLIC_PATHS.includes(pathname)) {
     return <div className="min-h-screen bg-gray-50">{children}</div>;
   }
 

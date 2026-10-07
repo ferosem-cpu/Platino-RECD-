@@ -20,6 +20,11 @@ interface ComplaintRow {
   createdAt: string;
   assignedTo: { id: string; name: string } | null;
   site: { order: { customer: { name: string } } } | null;
+  unit?: { id: string; serialNo: string | null } | null;
+  source?: string;
+  reporterName?: string | null;
+  reporterPhone?: string | null;
+  reporterType?: string | null;
 }
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -203,7 +208,15 @@ export default function ComplaintsPage() {
               {complaints.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-50/60">
                   <td className="px-4 py-3 font-mono text-xs font-semibold">{c.ticketNumber}</td>
-                  <td className="px-4 py-3">{c.site?.order.customer.name ?? "—"}</td>
+                  <td className="px-4 py-3">
+                    {c.site?.order.customer.name ?? "—"}
+                    {c.unit?.serialNo && <div className="font-mono text-[11px] text-gray-500">S/N {c.unit.serialNo}</div>}
+                    {c.source === "public" && (
+                      <div className="text-[11px] text-amber-700">
+                        Public · {c.reporterName} ({pretty(c.reporterType ?? "")}) {c.reporterPhone}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 capitalize">{pretty(c.category)}</td>
                   <td className="px-4 py-3 capitalize">{c.severity}</td>
                   <td className="px-4 py-3">
