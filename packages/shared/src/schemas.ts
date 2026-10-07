@@ -358,3 +358,13 @@ export const publicComplaintSchema = z.object({
     .regex(/^data:image\/(png|jpe?g|webp);base64,/, "Attach a PNG, JPG or WebP image")
     .optional(),
 });
+
+export const slaSettingsSchema = z
+  .object({
+    slaRegionalManagerHours: z.number().int().min(1).max(720),
+    slaManagementHours: z.number().int().min(1).max(1440),
+  })
+  .refine((v) => v.slaManagementHours >= v.slaRegionalManagerHours, {
+    message: "Management escalation must be at or after the Regional Manager escalation",
+    path: ["slaManagementHours"],
+  });

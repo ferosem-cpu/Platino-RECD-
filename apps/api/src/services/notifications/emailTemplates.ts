@@ -57,6 +57,28 @@ export function renderEmail(templateKey: string, data: Record<string, unknown>):
     };
   }
 
+  if (templateKey === "complaint_escalated") {
+    const ticket = String(data.ticketNumber ?? "");
+    const toMgmt = data.audience === "management";
+    const lines = [
+      data.customerName ? `Customer: ${data.customerName}` : null,
+      data.serialNo ? `RECD serial no.: ${data.serialNo}` : null,
+      `Status: ${String(data.status ?? "").replace(/_/g, " ")}`,
+      `Open for: ${data.ageHours ?? "?"} hours`,
+    ].filter((l): l is string => Boolean(l));
+    const heading = toMgmt
+      ? `Ticket ${ticket} is still unresolved and has been escalated to Management`
+      : `Ticket ${ticket} is unresolved past its SLA and needs your attention`;
+    return {
+      subject: `${BRAND} — SLA escalation: ${ticket}`,
+      text: `${heading}\n\n${lines.join("\n")}`,
+      html: wrap(`
+        <p>${escapeHtml(heading)}</p>
+        ${lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("")}
+      `),
+    };
+  }
+
   if (templateKey === "site_stage_updated") {
     const stage = String(data.stage ?? "");
     const status = String(data.status ?? "");
