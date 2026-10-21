@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/components/AuthContext";
 import { api } from "@/lib/apiClient";
-import { ISSUE_CATEGORY_LABELS } from "@recd/shared";
+import CustomerWarrantyCard from "@/components/CustomerWarrantyCard";
+import { SERVICE_REPORT_STATUS_LABELS, type ServiceReportStatus as SvcReportStatus, ISSUE_CATEGORY_LABELS, buildComplaintBody, eligibleComplaintUnits, requiresUnitSelection } from "@recd/shared";
+import { formatOptionalDate } from "@/lib/format";
 
 const ISSUE_CATEGORY_OPTIONS = Object.entries(ISSUE_CATEGORY_LABELS);
 
@@ -63,13 +66,14 @@ interface SiteDetail {
     orderNumber: string;
     quantity: number;
     value: number;
-    orderDate: string;
+    orderDate: string | null;
     product: { name: string; model: string };
     customer: { name: string };
   };
   stageEvents: SiteStageEvent[];
   photos: SitePhoto[];
   pendingActions: PendingAction[];
+  units: { id: string; serialNo: string | null; status: string; product: { name: string; model: string } }[];
 }
 
 interface Complaint {
@@ -80,6 +84,7 @@ interface Complaint {
   severity: string;
   status: string;
   createdAt: string;
+  unit?: { id: string; serialNo: string | null } | null;
 }
 
 export default function CustomerPortalPage() {
@@ -87,12 +92,14 @@ export default function CustomerPortalPage() {
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<StageDefinition[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [myReports, setMyReports] = useState<Array<{ id: string; reportNumber: string; kind: string; status: SvcReportStatus; visitDate: string; unitSerialNo: string | null; amc: { ref: string } | null; ticketNumber: string | null }>>([]);
   const [loading, setLoading] = useState(true);
 
   // New Complaint Form
   const [category, setCategory] = useState("erection_commissioning");
   const [severity, setSeverity] = useState("medium");
   const [issueCategory, setIssueCategory] = useState(ISSUE_CATEGORY_OPTIONS[0][0]);
+  const [unitId, setUnitId] = useState("");
   const [description, setDescription] = useState("");
   const [complaintRemarks, setComplaintRemarks] = useState("");
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
@@ -125,7 +132,11 @@ export default function CustomerPortalPage() {
       const sitesData = await api<any[]>("/sites");
       if (sitesData.length > 0) {
         // Fetch detailed site view (includes events, photos, pendingActions)
-        const detail = await api<SiteDetail>(`/sites/${sitesData[0].id}`);
+        // The order the customer signed in with (order number or the serial of one of its units) - a customer with several orders must land on
+        // THAT order's site, not simply the first one returned.
+        const signedInOrder = typeof window !== "undefined" ? window.localStorage.getItem("recd_customer_ord") : null;
+        const first = sitesData.find((s) => signedInOrder && s.order?.orderNumber === signedInOrder) ?? sitesData[0];
+        const detail = await api<SiteDetail>(`/sites/${first.id}`);
         setSite(detail);
         setCompanyDetails({
           companyName: detail.companyName ?? "",
@@ -140,6 +151,8 @@ export default function CustomerPortalPage() {
       // Fetch complaints
       const complaintsData = await api<Complaint[]>("/complaints");
       setComplaints(complaintsData);
+      // Digital service reports (ticket and AMC) that have left draft; a failure here must not break the portal.
+      api<{ reports: typeof myReports }>("/service-reports/mine").then((r) => setMyReports(r.reports)).catch(() => setMyReports([]));
     } catch (err) {
       console.error("Failed to load customer portal data", err);
     } finally {
@@ -200,6 +213,11 @@ export default function CustomerPortalPage() {
       setComplaintError("Please attach a photo of the RECD & DG Name Plate.");
       return;
     }
+    // With several RECDs at the site the ticket must name the serial it is about.
+    if (requiresUnitSelection(site.units) && !unitId) {
+      setComplaintError("Please select the RECD serial number this complaint is about.");
+      return;
+    }
     setSubmittingComplaint(true);
     setComplaintSuccess(null);
     setComplaintError(null);
@@ -211,17 +229,13 @@ export default function CustomerPortalPage() {
         : description;
       await api("/complaints", {
         method: "POST",
-        body: JSON.stringify({
-          siteId: site.id,
-          category,
-          issueCategory,
-          severity,
-          description: fullDescription,
-          attachmentUrl,
-        }),
+        body: JSON.stringify(
+          buildComplaintBody({ siteId: site.id, unitId, category, issueCategory, severity, description: fullDescription, attachmentUrl }),
+        ),
       });
       setComplaintSuccess("Complaint submitted successfully!");
       setDescription("");
+      setUnitId("");
       setComplaintRemarks("");
       setAttachmentFile(null);
       // Reload complaints
@@ -292,7 +306,7 @@ export default function CustomerPortalPage() {
                 <div className="text-right">
                   <p className="text-xs font-semibold text-gray-500">RECD Serial Number</p>
                   <p className="text-base font-bold font-mono text-[var(--theme-primary)]">{site.order.orderNumber}</p>
-                  <p className="text-xs text-gray-400 mt-1">Date: {new Date(site.order.orderDate).toLocaleDateString()}</p>
+                  <p className="text-xs text-gray-400 mt-1">Date: {formatOptionalDate(site.order.orderDate)}</p>
                 </div>
               </div>
 
@@ -320,6 +334,8 @@ export default function CustomerPortalPage() {
               No orders found for this account.
             </div>
           )}
+
+          <CustomerWarrantyCard />
 
           {/* Action needed from the customer (e.g. exhaust hookup decision) */}
           {site && site.pendingActions.filter((p) => p.status === "open").length > 0 && (
@@ -515,6 +531,27 @@ export default function CustomerPortalPage() {
             <p className="text-xs text-gray-500 mb-4">Encountered an issue? Raise a complaint, and our service team will contact you.</p>
 
             <form onSubmit={handleComplaintSubmit} className="space-y-4">
+              {site && eligibleComplaintUnits(site.units).length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">
+                    RECD Serial Number{requiresUnitSelection(site.units) ? " *" : ""}
+                  </label>
+                  <select
+                    required={requiresUnitSelection(site.units)}
+                    className="field w-full font-mono"
+                    value={unitId}
+                    onChange={(e) => setUnitId(e.target.value)}
+                    data-testid="complaint-unit-select"
+                  >
+                    <option value="">{requiresUnitSelection(site.units) ? "Select a RECD…" : "Auto-select (only one RECD at this site)"}</option>
+                    {eligibleComplaintUnits(site.units).map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.serialNo ?? "Serial not yet recorded"} — {u.product.name} ({u.product.model})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Complaint Type *</label>
                 <select
@@ -616,6 +653,28 @@ export default function CustomerPortalPage() {
             </form>
           </section>
 
+          {/* Digital service reports (tickets and AMC visits) */}
+          <section className="card p-6" data-testid="my-service-reports">
+            <h3 className="text-md font-bold mb-4">Service Reports</h3>
+            <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+              {myReports.map((r) => (
+                <Link key={r.id} href={`/service-reports/${r.id}`} className="flex items-center justify-between rounded-xl border border-gray-100 p-3 hover:bg-gray-50">
+                  <span>
+                    <span className="font-mono text-xs font-bold text-[var(--theme-primary)]">{r.reportNumber}</span>
+                    <span className="block text-[10px] text-gray-500">
+                      {r.kind === "amc" ? `AMC visit · ${r.amc?.ref ?? ""}` : `Ticket ${r.ticketNumber ?? ""}`}
+                      {r.unitSerialNo ? ` · S/N ${r.unitSerialNo}` : ""} · {r.visitDate}
+                    </span>
+                  </span>
+                  <span className={`status-pill ${r.status === "awaiting_signature" ? "status-pill-warning" : r.status === "signed" ? "status-pill-success" : ""}`}>
+                    {r.status === "awaiting_signature" ? "Review & sign" : SERVICE_REPORT_STATUS_LABELS[r.status] ?? r.status}
+                  </span>
+                </Link>
+              ))}
+              {myReports.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No service reports yet.</p>}
+            </div>
+          </section>
+
           {/* Active Support Tickets */}
           <section className="card p-6">
             <h3 className="text-md font-bold mb-4">Support History</h3>
@@ -634,11 +693,15 @@ export default function CustomerPortalPage() {
                       {c.status.toUpperCase()}
                     </span>
                   </div>
+                  {c.unit?.serialNo && <div className="font-mono text-[11px] text-gray-500">S/N {c.unit.serialNo}</div>}
                   <p className="text-xs text-gray-700 font-medium">{c.description}</p>
                   <div className="flex justify-between items-center text-[10px] text-gray-400 pt-1 border-t border-gray-50">
                     <span>Severity: <strong className="text-gray-500">{c.severity}</strong></span>
                     <span>{new Date(c.createdAt).toLocaleDateString()}</span>
                   </div>
+                  <Link href={`/service-reports?complaintId=${c.id}`} className="inline-block text-[11px] font-semibold text-[var(--theme-accent)] hover:underline">
+                    Service reports &amp; signing
+                  </Link>
                 </div>
               ))}
 

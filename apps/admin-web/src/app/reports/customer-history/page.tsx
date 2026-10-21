@@ -7,6 +7,7 @@ import { useAuth } from "@/components/AuthContext";
 import { downloadCsv } from "@/lib/csvExport";
 import { ReportPrintHeader, ReportToolbar, useCompany } from "@/components/reports/ReportChrome";
 import { formatDate, formatINR } from "@/lib/format";
+import { HISTORY_CSV_HEADERS, SERIAL_MISSING_LABEL, complaintsOfCustomer, customerHistoryCsvRows, unitSerialLabel } from "@/lib/customerHistory";
 
 interface CustomerListRow { id: string; name: string; }
 
@@ -21,6 +22,8 @@ interface CustomerDetail {
     orderDate: string | null;
     value: string | null;
     product: { name: string };
+    /** RECD units on the order (GET /customers/:id). A null serial is a legacy unit awaiting entry. */
+    units: { id: string; serialNo: string | null; status: string }[];
     site: { id: string; companyName: string | null; currentStage: { label: string }; assignedEngineer: { name: string } | null; vendor: { name: string } | null } | null;
   }[];
 }
@@ -35,6 +38,8 @@ interface ComplaintRow {
   severity: string;
   createdAt: string;
   site: { companyName: string | null; order: { orderNumber: string } } | null;
+  /** The RECD the ticket was raised against (GET /complaints); null on legacy tickets. */
+  unit?: { id: string; serialNo: string | null } | null;
 }
 
 export default function CustomerHistoryReportPage() {
@@ -68,7 +73,7 @@ export default function CustomerHistoryReportPage() {
       api<CustomerDetail>(`/customers/${customerId}`).then(setDetail),
     ];
     if (canSeeComplaints) {
-      tasks.push(api<ComplaintRow[]>("/complaints").then((all) => setComplaints(all.filter((c) => c.customerId === customerId))));
+      tasks.push(api<ComplaintRow[]>("/complaints").then((all) => setComplaints(complaintsOfCustomer(all, customerId))));
     } else setComplaints([]);
     Promise.all(tasks)
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load customer history"))
@@ -82,10 +87,7 @@ export default function CustomerHistoryReportPage() {
 
   function exportCsv() {
     if (!detail) return;
-    downloadCsv(`customer-history-${detail.name}`, ["Section", "Reference", "Date", "Detail", "Status", "Amount"], [
-      ...detail.orders.map((o) => ["Order", o.orderNumber, o.orderDate ? formatDate(o.orderDate) : "", `${o.product.name} — ${o.site?.companyName ?? "no site"}`, o.site?.currentStage.label ?? "", o.value ?? ""]),
-      ...complaints.map((c) => ["Complaint", c.ticketNumber, formatDate(c.createdAt), c.category, c.status, ""]),
-    ]);
+    downloadCsv(`customer-history-${detail.name}`, HISTORY_CSV_HEADERS, customerHistoryCsvRows(detail.orders, complaints));
   }
 
   if (!canView) return <p className="text-sm text-gray-500 p-4">You don&apos;t have access to this report.</p>;
@@ -135,6 +137,7 @@ export default function CustomerHistoryReportPage() {
               <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 print:bg-transparent">
                 <th className="px-4 py-3">Order #</th>
                 <th className="px-4 py-3">Product</th>
+                <th className="px-4 py-3">RECD serial no.</th>
                 <th className="px-4 py-3">Site</th>
                 <th className="px-4 py-3">Stage</th>
                 <th className="px-4 py-3">Vendor</th>
@@ -151,6 +154,15 @@ export default function CustomerHistoryReportPage() {
                     ) : o.orderNumber}
                   </td>
                   <td className="px-4 py-3">{o.product.name}</td>
+                  <td className="px-4 py-3 font-mono text-xs">
+                    {o.units.length === 0 ? "-" : o.units.map((u) => (
+                      <div key={u.id}>
+                        {u.serialNo ? (
+                          <Link href={`/recd-units/${u.id}`} className="hover:underline print:no-underline print:text-inherit">{u.serialNo}</Link>
+                        ) : <span className="text-amber-600 print:text-inherit">{SERIAL_MISSING_LABEL}</span>}
+                      </div>
+                    ))}
+                  </td>
                   <td className="px-4 py-3">{o.site?.companyName ?? "-"}</td>
                   <td className="px-4 py-3">{o.site?.currentStage.label ?? "-"}</td>
                   <td className="px-4 py-3">{o.site?.vendor?.name ?? "-"}</td>
@@ -166,6 +178,7 @@ export default function CustomerHistoryReportPage() {
               <thead>
                 <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 print:bg-transparent">
                   <th className="px-4 py-3">Ticket #</th>
+                  <th className="px-4 py-3">RECD serial no.</th>
                   <th className="px-4 py-3">Site</th>
                   <th className="px-4 py-3">Category</th>
                   <th className="px-4 py-3">Severity</th>
@@ -177,6 +190,7 @@ export default function CustomerHistoryReportPage() {
                 {complaints.map((c) => (
                   <tr key={c.id}>
                     <td className="px-4 py-3 font-mono text-xs">{c.ticketNumber}</td>
+                    <td className="px-4 py-3 font-mono text-xs">{c.unit ? unitSerialLabel(c.unit) : "-"}</td>
                     <td className="px-4 py-3">{c.site?.companyName ?? c.site?.order.orderNumber ?? "-"}</td>
                     <td className="px-4 py-3">{c.category.replace(/_/g, " ")}</td>
                     <td className="px-4 py-3 capitalize">{c.severity}</td>

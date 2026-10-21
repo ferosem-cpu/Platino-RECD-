@@ -37,8 +37,8 @@ model Role {
 }
 
 model Permission {
-  id          String   @id @default(cuid())
-  key         String   @unique
+  id          String  @id @default(cuid())
+  key         String  @unique
   name        String
   description String?
 
@@ -55,58 +55,90 @@ model RolePermission {
 }
 
 model User {
-  id                  String   @id @default(cuid())
-  name                String
-  email               String?  @unique
-  phone               String?  @unique
-  passwordHash        String?
-  isActive            Boolean  @default(true)
-  mustChangePassword  Boolean  @default(true)
+  id                   String    @id @default(cuid())
+  name                 String
+  email                String?   @unique
+  phone                String?   @unique
+  passwordHash         String?
+  isActive             Boolean   @default(true)
+  mustChangePassword   Boolean   @default(true)
+  /// Session revocation (Requirement 10): bumped on every security-sensitive change (admin password reset, own password change, deactivation and
+  /// reactivation, role change, customer / vendor link change). A token carries the version it was issued under and is refused once it differs.
+  tokenVersion         Int       @default(0)
   /// Informal job title shown in the UI only (e.g. "Proprietor", "CTO", "Fitter", "Welder") -
   /// does not affect permissions, which come entirely from `role`.
-  title               String?
-  roleId              String
-  role                Role     @relation(fields: [roleId], references: [id])
-  customerId          String?
-  customer            Customer? @relation("CustomerContacts", fields: [customerId], references: [id])
+  title                String?
+  roleId               String
+  role                 Role      @relation(fields: [roleId], references: [id])
+  customerId           String?
+  customer             Customer? @relation("CustomerContacts", fields: [customerId], references: [id])
   /// Erection engineers belong to an external Vendor company (work is subcontracted). Null = internal staff.
-  vendorId            String?
-  vendor              Vendor?   @relation("VendorMembers", fields: [vendorId], references: [id])
-  notificationChannels Json?   // array of NotificationChannel keys the user has opted into
-  createdAt           DateTime @default(now())
+  vendorId             String?
+  vendor               Vendor?   @relation("VendorMembers", fields: [vendorId], references: [id])
+  notificationChannels Json? // array of NotificationChannel keys the user has opted into
+  createdAt            DateTime  @default(now())
 
-  salesOrders          Order[]            @relation("SalesEngineer")
-  customersOwned       Customer[]         @relation("CustomerSalesOwner")
-  assignedSites        Site[]             @relation("AssignedEngineer")
-  stageEventsCreated   SiteStageEvent[]
-  photosUploaded       SitePhoto[]
-  complaintsAssigned   Complaint[]        @relation("AssignedTo")
-  pendingActionsOwned  PendingAction[]    @relation("InternalOwner")
-  usersCreated         User[]             @relation("CreatedBy")
-  createdById          String?
-  createdBy            User?              @relation("CreatedBy", fields: [createdById], references: [id])
-  otpCodes             OtpCode[]
-  vendorsApproved      Vendor[]           @relation("VendorApprover")
-  vendorsArchived      Vendor[]           @relation("VendorArchiver")
-  amcOrdersCreated     AmcOrder[]         @relation("AmcOrderCreatedBy")
-  amcExpiryRemindersCleared AmcOrder[]    @relation("AmcExpiryClearedBy")
-  agentLlmProvidersCreated AgentLlmProvider[] @relation("AgentLlmProviderCreator")
-  agentConversations       AgentConversation[] @relation("AgentConversationUser")
-  agentPendingActionsCreated AgentPendingAction[] @relation("AgentPendingActionCreator")
-  regionsManaged       RegionManager[]
-  auditAsActor         UserAuditLog[]     @relation("AuditActor")
-  auditAsTarget        UserAuditLog[]     @relation("AuditTarget")
-  complaintEvents      ComplaintEvent[]   @relation("ComplaintEventActor")
+  salesOrders                Order[]                    @relation("SalesEngineer")
+  customersOwned             Customer[]                 @relation("CustomerSalesOwner")
+  assignedSites              Site[]                     @relation("AssignedEngineer")
+  stageEventsCreated         SiteStageEvent[]
+  photosUploaded             SitePhoto[]
+  complaintsAssigned         Complaint[]                @relation("AssignedTo")
+  complaintsClosed           Complaint[]                @relation("ComplaintClosedBy")
+  complaintsArchived         Complaint[]                @relation("ComplaintArchivedBy")
+  pendingActionsOwned        PendingAction[]            @relation("InternalOwner")
+  usersCreated               User[]                     @relation("CreatedBy")
+  createdById                String?
+  createdBy                  User?                      @relation("CreatedBy", fields: [createdById], references: [id])
+  otpCodes                   OtpCode[]
+  vendorsApproved            Vendor[]                   @relation("VendorApprover")
+  vendorsArchived            Vendor[]                   @relation("VendorArchiver")
+  amcOrdersCreated           AmcOrder[]                 @relation("AmcOrderCreatedBy")
+  vendorAmcsCreated          VendorAmc[]                @relation("VendorAmcCreatedBy")
+  vendorAmcsCleared          VendorAmc[]                @relation("VendorAmcClearedBy")
+  amcRenewalsMade            AmcRenewal[]               @relation("AmcRenewedBy")
+  warrantyChanges            WarrantyHistory[]          @relation("WarrantyActor")
+  warrantyReminders          WarrantyReminderDelivery[] @relation("WarrantyReminderRecipient")
+  ticketEscalationDeliveries TicketEscalationDelivery[] @relation("TicketEscalationRecipient")
+  amcExpiryRemindersCleared  AmcOrder[]                 @relation("AmcExpiryClearedBy")
+  agentLlmProvidersCreated   AgentLlmProvider[]         @relation("AgentLlmProviderCreator")
+  agentConversations         AgentConversation[]        @relation("AgentConversationUser")
+  agentPendingActionsCreated AgentPendingAction[]       @relation("AgentPendingActionCreator")
+  regionsManaged             RegionManager[]
+  auditAsActor               UserAuditLog[]             @relation("AuditActor")
+  auditAsTarget              UserAuditLog[]             @relation("AuditTarget")
+  serviceReportsCreated      ServiceReport[]            @relation("ServiceReportCreator")
+  serviceReportsSubmitted    ServiceReport[]            @relation("ServiceReportSubmitter")
+  serviceReportsSigned       ServiceReport[]            @relation("ServiceReportSigner")
+  serviceReportEvents        ServiceReportEvent[]       @relation("ServiceReportEventActor")
+  remindersAcknowledged      ServiceReminder[]          @relation("ReminderAcknowledger")
+  reminderEvents             ServiceReminderEvent[]     @relation("ReminderEventRecipient")
+  regionAuditsMade           RegionManagerAudit[]       @relation("RegionAuditActor")
+  amcVisitsCreated           AmcVisit[]                 @relation("AmcVisitCreator")
+  complaintEvents            ComplaintEvent[]           @relation("ComplaintEventActor")
 }
 
+/// Login one-time codes (customer login and phone-only login). `code` holds an HMAC, never the code itself.
+/// A partial unique index (see migration 20261016090000_login_otp_hardening) allows at most ONE
+/// unconsumed code per (userId, purpose) - issuing a new code voids the previous one first.
 model OtpCode {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  code      String
-  expiresAt DateTime
-  consumedAt DateTime?
-  createdAt DateTime @default(now())
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code           String
+  /// customer_login | phone_login - a code is only accepted for the purpose it was issued for.
+  purpose        String    @default("customer_login")
+  /// 10-digit normalised mobile the code was delivered to; verification must present the same number.
+  destination    String?
+  /// Wrong guesses counted against THIS code (atomic, shared by every server instance).
+  attempts       Int       @default(0)
+  /// pending | sent | failed
+  deliveryStatus String    @default("pending")
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([userId, purpose, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -114,17 +146,20 @@ model OtpCode {
 // ---------------------------------------------------------------------------
 
 model Customer {
-  id            String   @id @default(cuid())
-  name          String
-  address       String?
-  salesOwnerId  String?
-  salesOwner    User?    @relation("CustomerSalesOwner", fields: [salesOwnerId], references: [id])
-  createdAt     DateTime @default(now())
+  id           String   @id @default(cuid())
+  name         String
+  address      String?
+  salesOwnerId String?
+  salesOwner   User?    @relation("CustomerSalesOwner", fields: [salesOwnerId], references: [id])
+  createdAt    DateTime @default(now())
 
-  contacts  User[]   @relation("CustomerContacts")
-  orders    Order[]
-  complaints Complaint[]
-  amcOrders  AmcOrder[]
+  contacts       User[]            @relation("CustomerContacts")
+  orders         Order[]
+  complaints     Complaint[]
+  serviceReports ServiceReport[]
+  reminders      ServiceReminder[]
+  amcOrders      AmcOrder[]
+  vendorAmcs     VendorAmc[]
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -149,8 +184,9 @@ model Vendor {
   archivedAt   DateTime?
   createdAt    DateTime  @default(now())
 
-  members User[] @relation("VendorMembers")
-  sites   Site[] @relation("VendorSites")
+  members      User[]      @relation("VendorMembers")
+  sites        Site[]      @relation("VendorSites")
+  amcContracts VendorAmc[]
 }
 
 model Product {
@@ -171,10 +207,10 @@ model Product {
   silencerType   Int?
   createdAt      DateTime @default(now())
 
-  orders             Order[]
-  orderLineItems     OrderLineItem[]
-  recdUnits          RecdUnit[]
-  recdDeliveries     RecdDelivery[]
+  orders         Order[]
+  orderLineItems OrderLineItem[]
+  recdUnits      RecdUnit[]
+  recdDeliveries RecdDelivery[]
 }
 
 // ---------------------------------------------------------------------------
@@ -203,13 +239,13 @@ model Order {
   createdAt                DateTime  @default(now())
 
   /// Customer's purchase order number (null only on legacy orders created before this field).
-  poNumber                 String?
-  poDate                   DateTime?
+  poNumber        String?
+  poDate          DateTime?
   /// True when an admin knowingly created a second order against the same customer + PO number.
-  poDuplicateFlag          Boolean   @default(false)
+  poDuplicateFlag Boolean   @default(false)
 
-  site Site?
-  units RecdUnit[]
+  site      Site?
+  units     RecdUnit[]
   /// Additional RECD units delivered under this same order/site (e.g. a site takes a 500kva
   /// and a 380kva together) - the order's own productId/quantity above remains "unit 1",
   /// these are units 2+. A physically separate delivery/site instead gets its own sibling
@@ -225,13 +261,13 @@ model Order {
 /// logistically distinct (different dispatch, etc). Both paths are exposed in the "Add
 /// another unit" UI on the site detail page; this is the "same order" one.
 model OrderLineItem {
-  id        String   @id @default(cuid())
+  id        String     @id @default(cuid())
   orderId   String
-  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productId String
-  product   Product  @relation(fields: [productId], references: [id])
+  product   Product    @relation(fields: [productId], references: [id])
   quantity  Int
-  createdAt DateTime @default(now())
+  createdAt DateTime   @default(now())
   units     RecdUnit[]
 }
 
@@ -240,18 +276,18 @@ model Site {
   orderId String @unique
   order   Order  @relation(fields: [orderId], references: [id])
 
-  address           String?
-  gpsLat            Decimal? @db.Decimal(9, 6)
-  gpsLng            Decimal? @db.Decimal(9, 6)
+  address            String?
+  gpsLat             Decimal? @db.Decimal(9, 6)
+  gpsLng             Decimal? @db.Decimal(9, 6)
   assignedEngineerId String?
-  assignedEngineer   User?   @relation("AssignedEngineer", fields: [assignedEngineerId], references: [id])
+  assignedEngineer   User?    @relation("AssignedEngineer", fields: [assignedEngineerId], references: [id])
 
   /// "Site name" - the end-client / site-owner, i.e. the company that actually operates
   /// this premises (distinct from Order.customer, who we're contracted with). Also doubles
   /// as the Company Name captured by the customer-portal Company Details form (§20).
-  companyName     String?
-  sitePocName     String?
-  sitePocNumber   String?
+  companyName   String?
+  sitePocName   String?
+  sitePocNumber String?
 
   /// Google Drive folders for this site's photographs and drawings (company Drive account -
   /// see lib/googleDrive.ts). Created on demand via POST /sites/:id/drive-folders. The *Url
@@ -268,34 +304,38 @@ model Site {
   currentStageId String
   currentStage   StageDefinition @relation(fields: [currentStageId], references: [id])
 
+  vendorAmcs VendorAmc[]
+
   /// Set by the erection engineer on-site once they've seen the generator. If it differs
   /// from order.plannedExhaustHookupType, see the PendingAction created for customer approval.
   confirmedExhaustHookupType String?
 
   // Structure / scaffold module - schema ready now, no UI behind it until Phase 2.
-  dgCapacityKva        Decimal?  @db.Decimal(10, 2)
-  dgModel              String?
-  structureTypeId      String?
-  structureType        StructureType? @relation(fields: [structureTypeId], references: [id])
-  structureDimensions  Json?
-  structureDiagramUrl  String?
+  dgCapacityKva          Decimal?       @db.Decimal(10, 2)
+  dgModel                String?
+  structureTypeId        String?
+  structureType          StructureType? @relation(fields: [structureTypeId], references: [id])
+  structureDimensions    Json?
+  structureDiagramUrl    String?
   structureDiagramStatus String? // null | "pending" | "ready" - stays "pending" until Phase 2 engine exists
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  stageEvents     SiteStageEvent[]
-  photos          SitePhoto[]
-  pendingActions  PendingAction[]
-  complaints      Complaint[]
-  contacts        SiteContact[]
+  stageEvents          SiteStageEvent[]
+  photos               SitePhoto[]
+  pendingActions       PendingAction[]
+  complaints           Complaint[]
+  serviceReports       ServiceReport[]
+  reminders            ServiceReminder[]
+  contacts             SiteContact[]
   documentRequirements SiteDocumentRequirement[]
-  recdDelivery    RecdDelivery?
-  units           RecdUnit[]
+  recdDelivery         RecdDelivery?
+  units                RecdUnit[]
 
   /// Service region (drives which Regional Manager is reminded/escalated to).
-  regionId        String?
-  region          Region?  @relation(fields: [regionId], references: [id])
+  regionId String?
+  region   Region? @relation(fields: [regionId], references: [id])
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +543,7 @@ model PendingAction {
   ownerUser       User?                  @relation("InternalOwner", fields: [ownerUserId], references: [id])
   dueDate         DateTime?
   priority        String                 @default("medium") // low | medium | high | critical
-  status          String                 @default("open")   // open | resolved
+  status          String                 @default("open") // open | resolved
   escalationLevel Int                    @default(0)
   resolution      String?
   createdAt       DateTime               @default(now())
@@ -515,51 +555,69 @@ model PendingAction {
 // ---------------------------------------------------------------------------
 
 model Complaint {
-  id             String    @id @default(cuid())
-  ticketNumber   String    @unique
-  customerId     String
-  customer       Customer  @relation(fields: [customerId], references: [id])
-  siteId         String?
-  site           Site?     @relation(fields: [siteId], references: [id])
-  category       String    // erection_commissioning | delivery_delay | non_performance
+  id               String    @id @default(cuid())
+  ticketNumber     String    @unique
+  customerId       String
+  customer         Customer  @relation(fields: [customerId], references: [id])
+  siteId           String?
+  site             Site?     @relation(fields: [siteId], references: [id])
+  category         String // erection_commissioning | delivery_delay | non_performance
   /// Finer-grained issue picker shown alongside category - see ISSUE_CATEGORY in packages/shared.
-  issueCategory  String?
-  description    String
-  severity       String    // low | medium | high | critical
-  status         String    @default("open") // see COMPLAINT_STATUS in packages/shared
-  assignedToId   String?
-  assignedTo     User?     @relation("AssignedTo", fields: [assignedToId], references: [id])
-  rootCause      String?
-  resolutionNotes String?
+  issueCategory    String?
+  description      String
+  severity         String // low | medium | high | critical
+  status           String    @default("open") // see COMPLAINT_STATUS in packages/shared
+  assignedToId     String?
+  assignedTo       User?     @relation("AssignedTo", fields: [assignedToId], references: [id])
+  rootCause        String?
+  resolutionNotes  String?
   /// Customer-supplied photo at raise time (RECD/DG nameplate) - data URL, same pattern as SitePhoto.
-  attachmentUrl  String?
+  attachmentUrl    String?
   /// Staff-entered remarks while managing the ticket - distinct from resolutionNotes (closure summary).
-  remarks        String?
+  remarks          String?
   /// Staff-uploaded service report while managing the ticket - data URL, PDF/JPG/PNG.
   serviceReportUrl String?
-  createdAt      DateTime  @default(now())
-  closedAt       DateTime?
+  /// EXPLICIT due date set by a manager (a calendar date, stored as UTC midnight). Null = no due date: such a ticket is
+  /// listed as "no due date" and never reminded. Unrelated to the ticket-age SLA windows (slaEscalationLevel).
+  dueDate          DateTime?
+  createdAt        DateTime  @default(now())
+  closedAt         DateTime?
+  /// Who moved the ticket into closed (set with closedAt, cleared with it on reopening; the history keeps every closure). SET NULL if that user is ever deleted.
+  closedById       String?
+  closedBy         User?     @relation("ComplaintClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  /// Archived = removed from every working view (lists, SLA escalation, reminders, one-open-ticket rule) but NEVER deleted: the ticket, its
+  /// history, reminders and escalation records all stay. Replaces the former hard delete. Null = live.
+  archivedAt       DateTime?
+  archivedById     String?
+  archivedBy       User?     @relation("ComplaintArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  /// Optional free-text reason given when archiving.
+  archiveReason    String?
 
   /// The physical RECD this ticket is about. At most one open ticket per unit (enforced by a
   /// partial unique index in the migration, which Prisma cannot express). Null on legacy tickets.
-  unitId         String?
-  unit           RecdUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unitId             String?
+  unit               RecdUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
   /// portal (registered customer) | public (serial + mobile + OTP) - see COMPLAINT_SOURCE
-  source         String    @default("portal")
+  source             String    @default("portal")
   /// Who actually reported it. For public tickets this is a reseller / re-reseller / other person,
   /// not the registered customer (customerId is always the unit's registered customer).
-  reporterName   String?
-  reporterPhone  String?
-  reporterType   String?
+  reporterName       String?
+  reporterPhone      String?
+  reporterType       String?
   reporterVerifiedAt DateTime?
 
   /// SLA escalation progress: 0 none, 1 Regional Manager notified, 2 Management notified.
   /// Only ever moves up (see lib/sla.ts and the escalation cron).
-  slaEscalationLevel Int       @default(0)
-  lastEscalatedAt    DateTime?
-  events         ComplaintEvent[]
+  slaEscalationLevel   Int                        @default(0)
+  lastEscalatedAt      DateTime?
+  events               ComplaintEvent[]
+  serviceReports       ServiceReport[]
+  reminder             ServiceReminder?
+  escalationDeliveries TicketEscalationDelivery[]
 
   @@index([unitId])
+  @@index([dueDate])
+  @@index([archivedAt])
 }
 
 /// Append-only ticket history: creation, status changes, assignment, escalation.
@@ -591,7 +649,7 @@ model AmcOrder {
   poDate              DateTime
   customerId          String
   customer            Customer @relation(fields: [customerId], references: [id])
-  location             String
+  location            String
   item                String
   qty                 Int
   amcFrequencyPerYear Int
@@ -605,10 +663,36 @@ model AmcOrder {
 
   /// AMC expiry = poDate + 1 year. Reminders start 1 month before expiry and repeat
   /// every 3 days (see the send-expiry-reminders cron route) until cleared below.
-  lastExpiryReminderAt     DateTime?
-  expiryReminderClearedAt  DateTime?
+  lastExpiryReminderAt      DateTime?
+  expiryReminderClearedAt   DateTime?
   expiryReminderClearedById String?
-  expiryReminderClearedBy  User?     @relation("AmcExpiryClearedBy", fields: [expiryReminderClearedById], references: [id])
+  expiryReminderClearedBy   User?     @relation("AmcExpiryClearedBy", fields: [expiryReminderClearedById], references: [id])
+
+  /// Explicit contract period (Requirement 7): inclusive calendar dates. NULL only for rows created by older code; the API then
+  /// falls back to the legacy rule (poDate .. poDate + 1 year), which is also what the migration backfilled.
+  startDate   DateTime? @db.Date
+  endDate     DateTime? @db.Date
+  /// explicit | legacy_po_date (the dates were derived from the PO date by the migration, not typed in)
+  datesSource String    @default("explicit")
+
+  /// The RECD units this contract covers (all must belong to `customerId` - enforced in the API).
+  units          AmcOrderUnit[]
+  serviceReports ServiceReport[]
+  visits         AmcVisit[]
+  renewals       AmcRenewal[]
+}
+
+/// Join row: one RECD unit covered by one AMC order. A unit can be covered by successive
+/// AMC orders over its life (renewals), and one order can cover several units.
+model AmcOrderUnit {
+  amcOrderId String
+  amcOrder   AmcOrder @relation(fields: [amcOrderId], references: [id], onDelete: Cascade)
+  unitId     String
+  unit       RecdUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  createdAt  DateTime @default(now())
+
+  @@id([amcOrderId, unitId])
+  @@index([unitId])
 }
 
 // ---------------------------------------------------------------------------
@@ -616,36 +700,36 @@ model AmcOrder {
 // ---------------------------------------------------------------------------
 
 model NotificationLog {
-  id            String   @id @default(cuid())
-  recipientId   String
-  channel       String   // in_app | email | sms | whatsapp | telegram
-  templateKey   String
-  payload       Json
+  id          String    @id @default(cuid())
+  recipientId String
+  channel     String // in_app | email | sms | whatsapp | telegram
+  templateKey String
+  payload     Json
   /// "sent" for live channels, "pending_provider_setup" for stubbed channels (sms/whatsapp/telegram)
-  status        String
-  sentAt        DateTime?
-  createdAt     DateTime @default(now())
+  status      String
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
 }
 
 model CompanySettings {
-  id            String   @id @default("singleton")
-  logoDataUrl   String?
-  themeKey      String   @default("emerald")
-  customColors  Json?
+  id           String  @id @default("singleton")
+  logoDataUrl  String?
+  themeKey     String  @default("emerald")
+  customColors Json?
 
   /// Legal entity identity, printed as the letterhead on every DataTable "Print" view
   /// (see components/DataTable.tsx). Deliberately excludes the bank/tax/terms fields the
   /// upstream fork carries - those only exist for invoices/quotations/POs, which this app
   /// does not have.
-  legalName            String?
-  address              String?
-  city                 String?
-  pinCode              String?
-  email                String?
-  website              String?
-  phone                String?
+  legalName          String?
+  address            String?
+  city               String?
+  pinCode            String?
+  email              String?
+  website            String?
+  phone              String?
   /// Free-text note printed in the footer of every printed list (editable in Settings).
-  documentFooterNote   String?
+  documentFooterNote String?
 
   /// In-app agent visibility (§24): role keys allowed to see the floating chat bubble.
   /// Empty array = hidden for everyone. Plain string array, not a relation/lookup table,
@@ -660,6 +744,20 @@ model CompanySettings {
   slaRegionalManagerHours Int @default(24)
   /// ...older than this -> Management notified (SLA level 2). Always >= the Regional Manager value.
   slaManagementHours      Int @default(48)
+
+  /// Reminder policy (Requirement 6). NULL = off: no reminder is created or sent, no reminder is escalated, until the
+  /// business approves values. See reminderPolicySchema in packages/shared.
+  reminderLeadDays        Int?
+  reminderEscalationHours Int?
+
+  /// AMC (Requirement 7). NULL = the compatible default: 12 months, reminders from 30 days before the end date, every 3 days.
+  amcDefaultDurationMonths Int?
+  amcReminderLeadDays      Int?
+  amcReminderRepeatDays    Int?
+
+  /// Warranty reminders (Requirement 8), separate from the AMC settings. NULL = default: from 30 days before the expiry date, every 3 days.
+  warrantyReminderLeadDays   Int?
+  warrantyReminderRepeatDays Int?
 }
 
 // ---------------------------------------------------------------------------
@@ -673,18 +771,18 @@ model CompanySettings {
 /// creation. Multiple rows can be active at once; the agent tries them in `priority` order
 /// (lowest first) and falls back to the next on failure.
 model AgentLlmProvider {
-  id                String   @id @default(cuid())
-  name              String   // user-given label, e.g. "My OpenAI key", "Groq fallback"
-  providerType      String   // 'anthropic' | 'openai_compatible' (adapter lookup key)
-  apiKeyCiphertext  String   // AES-256-GCM encrypted, base64 - never sent to the frontend
-  baseUrl           String?  // for openai_compatible custom endpoints (Groq/Together/OpenRouter/etc)
-  model             String   // model name to request from this provider
-  priority          Int      @default(0) // lower tried first
-  isActive          Boolean  @default(true)
-  createdById       String
-  createdBy         User     @relation("AgentLlmProviderCreator", fields: [createdById], references: [id])
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id               String   @id @default(cuid())
+  name             String // user-given label, e.g. "My OpenAI key", "Groq fallback"
+  providerType     String // 'anthropic' | 'openai_compatible' (adapter lookup key)
+  apiKeyCiphertext String // AES-256-GCM encrypted, base64 - never sent to the frontend
+  baseUrl          String? // for openai_compatible custom endpoints (Groq/Together/OpenRouter/etc)
+  model            String // model name to request from this provider
+  priority         Int      @default(0) // lower tried first
+  isActive         Boolean  @default(true)
+  createdById      String
+  createdBy        User     @relation("AgentLlmProviderCreator", fields: [createdById], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 /// One chat thread with the in-app agent. `messages` holds the full UnifiedMessage[] array
@@ -693,16 +791,16 @@ model AgentLlmProvider {
 /// message) and are short-lived (auto-deleted after 30 days by a daily cron). `title` is a
 /// short label derived from the first user message, shown in the conversation list.
 model AgentConversation {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation("AgentConversationUser", fields: [userId], references: [id], onDelete: Cascade)
-  title     String?
-  messages  Json     @default("[]")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String               @id @default(cuid())
+  userId         String
+  user           User                 @relation("AgentConversationUser", fields: [userId], references: [id], onDelete: Cascade)
+  title          String?
+  messages       Json                 @default("[]")
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  pendingActions AgentPendingAction[]
 
   @@index([userId])
-  pendingActions AgentPendingAction[]
 }
 
 /// A write action the agent has proposed but not yet executed - the confirm-gate for this
@@ -729,7 +827,6 @@ model AgentPendingAction {
   @@index([conversationId])
 }
 
-
 // ---------------------------------------------------------------------------
 // Regions & Regional Managers (admin-defined - regions are data, not code)
 // ---------------------------------------------------------------------------
@@ -742,8 +839,10 @@ model Region {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  managers RegionManager[]
-  sites    Site[]
+  managers      RegionManager[]
+  sites         Site[]
+  reminders     ServiceReminder[]
+  managerAudits RegionManagerAudit[]
 }
 
 model RegionManager {
@@ -762,29 +861,45 @@ model RegionManager {
 // ---------------------------------------------------------------------------
 
 model RecdUnit {
-  id        String   @id @default(cuid())
+  id         String         @id @default(cuid())
   /// Globally unique. Null only for legacy units awaiting entry ("serial pending");
   /// every API path that creates a unit requires one.
-  serialNo  String?  @unique
-  orderId   String
-  order     Order    @relation(fields: [orderId], references: [id])
-  siteId    String?
-  site      Site?    @relation(fields: [siteId], references: [id])
-  productId String
-  product   Product  @relation(fields: [productId], references: [id])
+  serialNo   String?        @unique
+  orderId    String
+  order      Order          @relation(fields: [orderId], references: [id])
+  siteId     String?
+  site       Site?          @relation(fields: [siteId], references: [id])
+  productId  String
+  product    Product        @relation(fields: [productId], references: [id])
   /// Set for units that came from an extra product line on the order (OrderLineItem);
   /// removing that line removes its units. Null = units of the order's own product.
   lineItemId String?
-  lineItem  OrderLineItem? @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
+  lineItem   OrderLineItem? @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
   /// active | retired - see RECD_UNIT_STATUS. A retired unit keeps its serial reserved.
-  status    String   @default("active")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  status     String         @default("active")
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
 
-  complaints Complaint[]
+  complaints     Complaint[]
+  serviceReports ServiceReport[]
+  amcOrders      AmcOrderUnit[]
+  amcVisits      AmcVisit[]
+  reminders      ServiceReminder[]
+
+  /// Warranty of THIS unit (Requirement 8). All NULL = not recorded (every legacy unit): never "active", never invented from an order /
+  /// PO / dispatch / delivery / commissioning date. Both dates are inclusive calendar days; `warrantyMonths` is the EFFECTIVE duration
+  /// stored when the period was established (a later change to Product.warrantyMonths never recalculates it); `warrantySource` says where
+  /// the period came from (manual | calculated | product_default). CHECK constraints in the migration keep the four columns consistent.
+  warrantyStartDate DateTime?                  @db.Date
+  warrantyEndDate   DateTime?                  @db.Date
+  warrantyMonths    Int?
+  warrantySource    String?
+  warrantyHistory   WarrantyHistory[]
+  warrantyReminders WarrantyReminderDelivery[]
 
   @@index([orderId])
   @@index([siteId])
+  @@index([warrantyEndDate])
 }
 
 // ---------------------------------------------------------------------------
@@ -792,30 +907,30 @@ model RecdUnit {
 // ---------------------------------------------------------------------------
 
 model PublicOtp {
-  id            String    @id @default(cuid())
+  id               String    @id @default(cuid())
   /// 10-digit normalised mobile the code was (or would have been) sent to
-  phone         String
+  phone            String
   /// Upper-cased serial exactly as typed - kept even when it matches no unit, so attempts on
   /// unknown serials are rate-limited and indistinguishable from real ones.
-  serialNorm    String
+  serialNorm       String
   /// Null when the serial matched no active unit (nothing was sent).
-  unitId        String?
+  unitId           String?
   /// HMAC of the code - the code itself is never stored.
-  codeHash      String
-  expiresAt     DateTime
-  attempts      Int       @default(0)
+  codeHash         String
+  expiresAt        DateTime
+  attempts         Int       @default(0)
   /// Set when the correct code was entered.
-  verifiedAt    DateTime?
+  verifiedAt       DateTime?
   /// SHA-256 of the single-use token handed back after verification.
-  sessionHash   String?    @unique
+  sessionHash      String?   @unique
   sessionExpiresAt DateTime?
-  sessionUsedAt DateTime?
+  sessionUsedAt    DateTime?
   /// whatsapp | dev | none (unknown serial)
-  deliveryChannel String   @default("none")
+  deliveryChannel  String    @default("none")
   /// sent | failed | skipped
-  deliveryStatus  String   @default("skipped")
-  ip            String?
-  createdAt     DateTime  @default(now())
+  deliveryStatus   String    @default("skipped")
+  ip               String?
+  createdAt        DateTime  @default(now())
 
   @@index([phone, createdAt])
   @@index([serialNorm, createdAt])
@@ -830,8 +945,14 @@ model UserAuditLog {
   id           String   @id @default(cuid())
   actorId      String?
   actor        User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
-  targetUserId String
-  target       User     @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  /// The live link to the affected account. SET NULL (not CASCADE) when that account is deleted, so deleting an account or a customer
+  /// contact can never erase the history of what was done to it; `targetIdRecorded` / `targetName` keep the trail readable afterwards.
+  targetUserId String?
+  target       User?    @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  /// The affected account's id as a plain value (no foreign key) - written with every row, survives the account's deletion.
+  targetIdRecorded String?
+  /// The affected account's display name, filled in when the account is deleted (and backfilled for existing rows by the migration).
+  targetName   String?
   /// see USER_AUDIT_ACTION in packages/shared
   action       String
   /// Before/after values of whatever changed (never passwords/hashes).
@@ -839,4 +960,391 @@ model UserAuditLog {
   createdAt    DateTime @default(now())
 
   @@index([targetUserId, createdAt])
+  @@index([targetIdRecorded, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Digital service reports (Requirement 4)
+// ---------------------------------------------------------------------------
+
+/// A structured, customer-signed service report for one visit to a ticket. customerId / siteId / unitId are
+/// copied from the TICKET by the API (never from the client). The legacy Complaint.serviceReportUrl upload is untouched.
+/// States: draft -> awaiting_signature -> signed (final). Database-level protections live in the migration
+/// (partial unique index: at most one unsigned report per ticket; CHECK: a signed row is complete; trigger: a signed
+/// row's content can never change) because Prisma cannot express them.
+model ServiceReport {
+  id                      String     @id @default(cuid())
+  /// "<ticketNumber>-R<n>"
+  reportNumber            String     @unique
+  /// "ticket" (a visit on a service ticket) | "amc" (a visit under an AMC order). EXACTLY ONE of complaintId /
+  /// amcOrderId is set, matching `kind` (CHECK constraint in the migrations).
+  kind                    String     @default("ticket")
+  complaintId             String?
+  complaint               Complaint? @relation(fields: [complaintId], references: [id], onDelete: Restrict)
+  amcOrderId              String?
+  amcOrder                AmcOrder?  @relation(fields: [amcOrderId], references: [id], onDelete: Restrict)
+  /// Explicit rule for THIS report: must the customer review and sign it? (ticket reports: always true)
+  acknowledgementRequired Boolean    @default(true)
+  /// Serial number of the unit at the time the report was written (the unit row can change later).
+  unitSerialNo            String?
+  customerId              String
+  customer                Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  siteId                  String?
+  site                    Site?      @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  /// The RECD (DG) the ticket is about; null on legacy tickets. The DG itself is the site + its units.
+  unitId                  String?
+  unit                    RecdUnit?  @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  createdById   String
+  createdBy     User    @relation("ServiceReportCreator", fields: [createdById], references: [id])
+  submittedById String?
+  submittedBy   User?   @relation("ServiceReportSubmitter", fields: [submittedById], references: [id])
+
+  visitDate     DateTime
+  workPerformed String   @default("")
+  findings      String   @default("")
+  resolution    String   @default("")
+  partsUsed     String?
+  remarks       String?
+
+  /// draft | awaiting_signature | signed | submitted - see SERVICE_REPORT_STATUS in packages/shared
+  status      String    @default("draft")
+  /// Bumped on every edit/reopen; a signature is bound to the version the customer reviewed.
+  version     Int       @default(1)
+  /// SHA-256 of the report content at submission; re-checked when signing.
+  contentHash String?
+  submittedAt DateTime?
+
+  signedAt        DateTime?
+  signedVersion   Int?
+  signerName      String?
+  signedById      String?
+  signedBy        User?       @relation("ServiceReportSigner", fields: [signedById], references: [id])
+  signatureFileId String?
+  signatureFile   ReportFile? @relation("ReportSignature", fields: [signatureFileId], references: [id], onDelete: Restrict)
+  pdfFileId       String?
+  pdfFile         ReportFile? @relation("ReportPdf", fields: [pdfFileId], references: [id], onDelete: Restrict)
+  /// SHA-256 of the stored PDF; checked on every download.
+  pdfSha256       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events ServiceReportEvent[]
+
+  @@index([complaintId])
+  @@index([amcOrderId])
+  @@index([customerId])
+  @@index([siteId])
+  @@index([unitId])
+}
+
+/// Append-only history of one service report (created, submitted, reopened, signed). Ticket reports also write to
+/// ComplaintEvent; AMC reports have no ticket, so this is their audit trail.
+model ServiceReportEvent {
+  id        String        @id @default(cuid())
+  reportId  String
+  report    ServiceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  type      String
+  fromValue String?
+  toValue   String?
+  actorId   String?
+  actor     User?         @relation("ServiceReportEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  detail    Json?
+  createdAt DateTime      @default(now())
+
+  @@index([reportId, createdAt])
+}
+
+/// File bytes for the "database" report-storage provider (lib/reportStorage.ts). Kept in its own table so that no
+/// complaint / report list query ever loads file contents.
+model ReportFile {
+  id          String   @id @default(cuid())
+  contentType String
+  size        Int
+  sha256      String
+  data        Bytes
+  createdAt   DateTime @default(now())
+
+  signatureOf ServiceReport[] @relation("ReportSignature")
+  pdfOf       ServiceReport[] @relation("ReportPdf")
+}
+
+// ---------------------------------------------------------------------------
+// Region mapping audit, AMC visits and service reminders (Requirement 6)
+// ---------------------------------------------------------------------------
+
+/// Who changed the managers of a region, and from what to what (Regional Managers and Service Managers share the
+/// RegionManager table). One row per save.
+model RegionManagerAudit {
+  id            String   @id @default(cuid())
+  regionId      String
+  region        Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  actorId       String?
+  actor         User?    @relation("RegionAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  userIdsBefore Json
+  userIdsAfter  Json
+  createdAt     DateTime @default(now())
+
+  @@index([regionId, createdAt])
+}
+
+/// A planned visit to one RECD unit under an AMC order, with an EXPLICIT due date entered by a person. Deliberately NOT
+/// generated from amcFrequencyPerYear and NOT related to the contract expiry (poDate + 1 year): the business has not
+/// defined a visit schedule. scheduled | completed | cancelled.
+model AmcVisit {
+  id          String    @id @default(cuid())
+  amcOrderId  String
+  amcOrder    AmcOrder  @relation(fields: [amcOrderId], references: [id], onDelete: Restrict)
+  unitId      String
+  unit        RecdUnit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  dueDate     DateTime
+  status      String    @default("scheduled")
+  completedAt DateTime?
+  createdById String?
+  createdBy   User?     @relation("AmcVisitCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+
+  reminder ServiceReminder?
+
+  @@index([status, dueDate])
+  @@index([amcOrderId])
+  @@index([unitId])
+}
+
+/// One reminder per tracked activity (a ticket with a due date, or a scheduled AMC visit). Exactly one of
+/// complaintId / amcVisitId is set, matching activityType (CHECK in the migration). Customer / site / serial are
+/// copied from trusted records when the reminder is created (and the region refreshed on every job run).
+/// Lifecycle: pending -> (sending) -> sent | failed | no_recipient -> acknowledged | closed. Overlapping job runs are
+/// made safe by conditional claims on status / escalationLevel.
+model ServiceReminder {
+  id           String     @id @default(cuid())
+  /// ticket | amc_visit
+  activityType String
+  complaintId  String?    @unique
+  complaint    Complaint? @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  amcVisitId   String?    @unique
+  amcVisit     AmcVisit?  @relation(fields: [amcVisitId], references: [id], onDelete: Cascade)
+
+  regionId     String?
+  region       Region?   @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  customerId   String
+  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customerName String
+  siteId       String?
+  site         Site?     @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  siteName     String?
+  unitId       String?
+  unit         RecdUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  /// Serial of the unit when the reminder was created; null when the activity has no unit / the unit has no serial.
+  unitSerialNo String?
+  /// Reference shown to people: the ticket number, or the AMC reference.
+  activityRef  String
+  dueDate      DateTime
+
+  /// pending | sending | sent | failed | no_recipient | acknowledged | closed
+  status              String    @default("pending")
+  /// Why a reminder has no recipient (for example no_region, no_active_manager).
+  statusReason        String?
+  attempts            Int       @default(0)
+  lastAttemptAt       DateTime?
+  sentAt              DateTime?
+  acknowledgedAt      DateTime?
+  acknowledgedById    String?
+  acknowledgedBy      User?     @relation("ReminderAcknowledger", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  /// 0 = not escalated, 1 = first escalation, 2 = second (see lib/reminders.ts for who receives each).
+  escalationLevel     Int       @default(0)
+  lastEscalatedAt     DateTime?
+  /// Delivery attempts of the NEXT escalation level (reset when the level completes). escalationLevel only advances once the
+  /// level was delivered (or had no recipient), so a failed escalation stays retryable.
+  escalationAttempts  Int       @default(0)
+  /// Lease held while a job run delivers the next escalation level; overlapping runs skip a fresh lease.
+  escalationClaimedAt DateTime?
+  closedAt            DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  events ServiceReminderEvent[]
+
+  @@index([status])
+  @@index([regionId, status])
+  @@index([dueDate])
+}
+
+/// Append-only history of a reminder: creation, each delivery attempt (per recipient and channel), acknowledgement,
+/// escalations (per recipient), no-recipient outcomes, due-date changes, closing.
+model ServiceReminderEvent {
+  id          String          @id @default(cuid())
+  reminderId  String
+  reminder    ServiceReminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  type        String
+  level       Int             @default(0)
+  recipientId String?
+  recipient   User?           @relation("ReminderEventRecipient", fields: [recipientId], references: [id], onDelete: SetNull)
+  channel     String?
+  /// Who did it when a person did (acknowledgement); null for the system.
+  actorId     String?
+  detail      Json?
+  createdAt   DateTime        @default(now())
+
+  @@index([reminderId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// AMC vendor contracts and renewal history (Requirement 7)
+// ---------------------------------------------------------------------------
+
+/// An AMC agreement with one of our existing Vendors. Deliberately separate from AmcOrder (customer AMC): the two never share rows.
+model VendorAmc {
+  id          String   @id @default(cuid())
+  vendorId    String
+  vendor      Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  /// The vendor's own reference for the agreement, if any.
+  contractRef String?
+  title       String
+  notes       String?
+  /// Where the vendor's maintenance support applies (both optional: NULL = a general agreement with the vendor). When a site is set
+  /// it must belong to the customer (checked in the API). SetNull: removing a customer or site never deletes the agreement.
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  siteId      String?
+  site        Site?     @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  /// Inclusive calendar dates (CHECK endDate > startDate in the migration).
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  createdById String?
+  createdBy   User?    @relation("VendorAmcCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  /// Same reminder bookkeeping as AmcOrder; a renewal resets it for the new period.
+  lastExpiryReminderAt      DateTime?
+  expiryReminderClearedAt   DateTime?
+  expiryReminderClearedById String?
+  expiryReminderClearedBy   User?     @relation("VendorAmcClearedBy", fields: [expiryReminderClearedById], references: [id], onDelete: SetNull)
+
+  renewals AmcRenewal[]
+
+  @@index([vendorId])
+  @@index([customerId])
+  @@index([siteId])
+  @@index([endDate])
+}
+
+/// Append-only history of a contract's period changes: a RENEWAL (the contract continues into a new period) or a CORRECTION (a date
+/// fixed by hand, with a reason). Exactly one of amcOrderId / vendorAmcId is set (CHECK). Restrict: a contract with history cannot be
+/// deleted. A partial unique index allows at most one renewal per contract and previous end date, so a double submit cannot repeat one.
+model AmcRenewal {
+  id                String     @id @default(cuid())
+  /// renewal | correction
+  kind              String     @default("renewal")
+  amcOrderId        String?
+  amcOrder          AmcOrder?  @relation(fields: [amcOrderId], references: [id], onDelete: Restrict)
+  vendorAmcId       String?
+  vendorAmc         VendorAmc? @relation(fields: [vendorAmcId], references: [id], onDelete: Restrict)
+  previousStartDate DateTime   @db.Date
+  previousEndDate   DateTime   @db.Date
+  newStartDate      DateTime   @db.Date
+  newEndDate        DateTime   @db.Date
+  /// Who did it (NULL only if that user was removed later).
+  renewedById       String?
+  renewedBy         User?      @relation("AmcRenewedBy", fields: [renewedById], references: [id], onDelete: SetNull)
+  /// The reason for a correction, or an optional note on a renewal.
+  note              String?
+  createdAt         DateTime   @default(now())
+
+  @@index([amcOrderId, createdAt])
+  @@index([vendorAmcId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// RECD unit warranty history and reminders (Requirement 8)
+// ---------------------------------------------------------------------------
+
+/// Append-only history of one unit's warranty: ESTABLISHED (first period recorded) or CORRECTION (an existing period changed, reason
+/// required). Written in the same transaction as the change to RecdUnit. Restrict: a unit with warranty history cannot be deleted, and the
+/// application has no update or delete path for these rows.
+model WarrantyHistory {
+  id                String    @id @default(cuid())
+  unitId            String
+  unit              RecdUnit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  /// established | correction
+  kind              String
+  previousStartDate DateTime? @db.Date
+  previousEndDate   DateTime? @db.Date
+  previousMonths    Int?
+  previousSource    String?
+  newStartDate      DateTime  @db.Date
+  newEndDate        DateTime  @db.Date
+  newMonths         Int?
+  newSource         String
+  /// Required for a correction (CHECK in the migration).
+  reason            String?
+  /// Who did it (NULL only if that user was removed later).
+  actorId           String?
+  actor             User?     @relation("WarrantyActor", fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt         DateTime  @default(now())
+
+  @@index([unitId, createdAt])
+}
+
+/// Delivery state of the warranty-expiry reminder for ONE recipient, one unit and one expiry date (a corrected expiry starts afresh).
+/// `lastAttemptAt` is claimed with a conditional update BEFORE sending, so overlapping job runs cannot both send; `deliveredAt` is set only
+/// when the e-mail provider accepted the message (an in-app log row is not delivery).
+model WarrantyReminderDelivery {
+  id              String    @id @default(cuid())
+  unitId          String
+  unit            RecdUnit  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  warrantyEndDate DateTime  @db.Date
+  recipientId     String
+  recipient       User      @relation("WarrantyReminderRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  /// Failed attempts since the last delivery (capped by the job).
+  attempts        Int       @default(0)
+  lastAttemptAt   DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@unique([unitId, warrantyEndDate, recipientId])
+  @@index([warrantyEndDate])
+}
+
+// ---------------------------------------------------------------------------
+// Ticket-age SLA escalation delivery (Requirement 11)
+// ---------------------------------------------------------------------------
+
+/// Delivery state of ONE ticket-age escalation level for ONE recipient. The escalation level on the ticket only advances once every current
+/// recipient of that level has been DELIVERED the message (the e-mail provider accepted it), so a failed delivery is retried by the next run
+/// instead of consuming the level. `lastAttemptAt` is claimed with a conditional update before sending (overlapping runs cannot both send);
+/// a recipient that already has `deliveredAt` is never sent that level again. Rows go with their ticket (cascade).
+model TicketEscalationDelivery {
+  id            String    @id @default(cuid())
+  complaintId   String
+  complaint     Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  /// 1 = Regional Manager audience, 2 = Management audience (SLA_DEFAULTS windows, unchanged)
+  level         Int
+  recipientId   String
+  recipient     User      @relation("TicketEscalationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  attempts      Int       @default(0)
+  lastAttemptAt DateTime?
+  deliveredAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([complaintId, level, recipientId])
+  @@index([complaintId])
+}
+
+// ---------------------------------------------------------------------------
+// Shared per-IP request limiter (Requirement 3)
+// ---------------------------------------------------------------------------
+
+/// One fixed window of requests for ONE limiter and ONE client address, shared by every API instance. `keyHash` is an HMAC of
+/// "<limiter>:<client address>" (never the address itself). Rows are created/incremented with a single atomic upsert and are purged once
+/// their window is long past; nothing else references them.
+model IpRateLimit {
+  keyHash     String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@id([keyHash, windowStart])
+  @@index([windowStart])
 }

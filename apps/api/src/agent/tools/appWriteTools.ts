@@ -9,8 +9,10 @@
  * app actually has a use for (orders/products - no finance module here) and adapted to this
  * app's own Order/Product shape.
  */
-import { PERMISSION_KEY } from "@recd/shared";
+import { canOverrideDuplicatePo, PERMISSION_KEY } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
+import { agentDuplicatePoMessage } from "../../lib/orderCreation";
+import { findTakenSerials, parseSerialList, takenSerialsMessage } from "../../lib/serials";
 import type { AgentTool } from "./types";
 
 function forbidden(what: string) {
@@ -40,6 +42,18 @@ const createOrderTool: AgentTool = {
         description: "Product name or model to look up if productId isn't known (e.g. 'RECD-500'). Provide one of productId or productNameOrModel.",
       },
       quantity: { type: "number", description: "Number of units. Defaults to 1 if omitted." },
+      recdSerials: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "REQUIRED: the RECD serial number of every unit, exactly 'quantity' of them, each globally unique. " +
+          "Ask the user for them - never invent or guess serial numbers.",
+      },
+      poNumber: {
+        type: "string",
+        description: "REQUIRED: the customer's purchase order (PO) number, 1-60 characters. Ask the user for it - never invent one.",
+      },
+      poDate: { type: "string", description: "ISO date (YYYY-MM-DD) of the customer PO, if known." },
       value: { type: "number", description: "Commercial order value in rupees, if known - optional, can be filled in later." },
       orderDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
       promisedDeliveryDate: { type: "string", description: "ISO date (YYYY-MM-DD), if known." },
@@ -49,7 +63,7 @@ const createOrderTool: AgentTool = {
         description: "How the RECD will be fitted, if known.",
       },
     },
-    required: [],
+    required: ["recdSerials", "poNumber"],
   },
   handler: async (input, auth) => {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
@@ -64,11 +78,23 @@ const createOrderTool: AgentTool = {
     const orderDateStr = input.orderDate ? String(input.orderDate) : new Date().toISOString().slice(0, 10);
     const promisedDeliveryDateStr = input.promisedDeliveryDate ? String(input.promisedDeliveryDate) : null;
     const plannedExhaustHookupType = input.plannedExhaustHookupType ? String(input.plannedExhaustHookupType) : null;
+    const poNumber = typeof input.poNumber === "string" ? input.poNumber.trim() : "";
+    const poDateStr = input.poDate ? String(input.poDate) : null;
 
+    if (!poNumber) return { error: "poNumber is required - ask the user for the customer's PO number." };
+    if (poNumber.length > 60) return { error: "poNumber must be at most 60 characters." };
+    if (poDateStr && Number.isNaN(new Date(poDateStr).getTime())) return { error: "poDate must be a valid date (YYYY-MM-DD)." };
     if (!customerId && !customerName) return { error: "Provide either customerId or customerName." };
     if (!productId && !productQuery) return { error: "Provide either productId or productNameOrModel." };
     if (!Number.isFinite(quantity) || quantity <= 0) return { error: "quantity must be a positive number." };
     if (value !== undefined && (!Number.isFinite(value) || value < 0)) return { error: "value must be a non-negative number." };
+    if (!Number.isInteger(quantity)) return { error: "quantity must be a whole number." };
+
+    // Same rule as POST /orders: one distinct, unregistered serial per physical unit.
+    const serialCheck = parseSerialList(input.recdSerials, quantity);
+    if ("error" in serialCheck) return serialCheck;
+    const taken = await findTakenSerials(serialCheck.serials);
+    if (taken.length) return { error: takenSerialsMessage(taken) };
 
     let customer = customerId ? await prisma.customer.findUnique({ where: { id: customerId } }) : null;
     if (!customer && customerName) {
@@ -116,10 +142,22 @@ const createOrderTool: AgentTool = {
     }
     if (!product) return { error: `No product found with id ${productId}.` };
 
+    // Same duplicate-PO policy as POST /orders (same customer, case-insensitive). Checked again, under a lock, when the card is confirmed.
+    const dupePo = await prisma.order.findFirst({
+      where: { customerId: customer.id, poNumber: { equals: poNumber, mode: "insensitive" } },
+      select: { orderNumber: true },
+    });
+    if (dupePo) {
+      return { error: agentDuplicatePoMessage(poNumber, dupePo.orderNumber, canOverrideDuplicatePo(auth.roleKey), customer.name) };
+    }
+
     const preview = {
       customer: customer.name,
       product: `${product.name} (${product.model})`,
       quantity,
+      recdSerials: serialCheck.serials,
+      poNumber,
+      poDate: poDateStr,
       value: value ?? null,
       orderDate: orderDateStr,
       promisedDeliveryDate: promisedDeliveryDateStr,
@@ -134,6 +172,9 @@ const createOrderTool: AgentTool = {
           customerId: customer.id,
           productId: product.id,
           quantity,
+          recdSerials: serialCheck.serials,
+          poNumber,
+          poDate: poDateStr,
           value,
           orderDate: orderDateStr,
           promisedDeliveryDate: promisedDeliveryDateStr,

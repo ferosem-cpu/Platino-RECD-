@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
 
 export default function VendorRegisterPage() {
   const [form, setForm] = useState({ name: "", contactName: "", contactEmail: "", contactPhone: "", address: "" });
@@ -16,8 +18,13 @@ export default function VendorRegisterPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+    const phoneError = mobileFieldError(form.contactPhone);
+    if (phoneError) {
+      setError(phoneError);
+      return;
+    }
+    setLoading(true);
     try {
       await api("/vendors/register", {
         method: "POST",
@@ -25,13 +32,13 @@ export default function VendorRegisterPage() {
           name: form.name,
           contactName: form.contactName,
           contactEmail: form.contactEmail,
-          contactPhone: form.contactPhone || undefined,
+          contactPhone: cleanMobile(form.contactPhone),
           address: form.address || undefined,
         }),
       });
       setDone(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Registration failed");
+      setError(apiErrorMessage(err, "Registration failed"));
     } finally {
       setLoading(false);
     }
@@ -73,7 +80,7 @@ export default function VendorRegisterPage() {
               </div>
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Contact phone</label>
-                <input className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)]" value={form.contactPhone} onChange={(e) => set("contactPhone", e.target.value)} />
+                <input required inputMode="tel" title="10-digit Indian mobile number" className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)]" value={form.contactPhone} onChange={(e) => set("contactPhone", e.target.value)} />
               </div>
             </div>
             <div>

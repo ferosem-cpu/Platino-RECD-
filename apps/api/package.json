@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "lint": "eslint src",
     "test": "tsx --test test/*.test.ts",
+    "test:db": "tsx --test --test-concurrency=1 test/db/*.test.ts",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
@@ -27,11 +28,13 @@
     "express": "^5.0.1",
     "google-auth-library": "^9.14.0",
     "googleapis": "^174.0.1",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.12.0",
     "nodemailer": "^9.0.5",
     "openai": "^7.4.0",
     "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.17.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {
@@ -41,6 +44,7 @@
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^20.16.0",
     "@types/nodemailer": "^8.0.1",
+    "@types/pdfkit": "^0.17.6",
     "prisma": "^5.20.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"

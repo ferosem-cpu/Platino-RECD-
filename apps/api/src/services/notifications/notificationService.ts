@@ -13,6 +13,14 @@ interface SendArgs {
 
 const DEFAULT_CHANNELS: NotificationChannel[] = ["in_app", "email"];
 
+/**
+ * What is written to NotificationLog.payload. The provider still receives the full data (the email
+ * has to contain the code), but a one-time code must never be persisted in the log table.
+ */
+export function loggablePayload(templateKey: string, data: Record<string, unknown>): Record<string, unknown> {
+  return templateKey === "otp_code" ? { ...data, code: "[redacted]" } : data;
+}
+
 export async function send({ recipientId, templateKey, data, channels }: SendArgs) {
   let targetChannels = channels;
   if (!targetChannels) {
@@ -31,7 +39,7 @@ export async function send({ recipientId, templateKey, data, channels }: SendArg
           recipientId,
           channel,
           templateKey,
-          payload: data as Prisma.InputJsonValue,
+          payload: loggablePayload(templateKey, data) as Prisma.InputJsonValue,
           status: delivered ? "sent" : isLive ? "failed" : "pending_provider_setup",
           sentAt: delivered ? new Date() : null,
         },

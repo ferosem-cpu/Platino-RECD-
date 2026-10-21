@@ -1,8 +1,8 @@
 /**
- * Delivery of the public complaint OTP. There is deliberately no SMS provider; WhatsApp (Meta
- * Cloud API, authentication-category template) is the production channel and is a no-op until
- * its credentials are set, so the feature can be shipped now and switched on later by
- * configuration alone - no code change.
+ * Delivery of one-time codes by WhatsApp (Meta Cloud API, authentication-category template). This is the
+ * ONLY channel for login and public-complaint codes: there is no SMS provider and email is not used.
+ * The channel is a no-op until its credentials are set, so the feature can be shipped now and switched on
+ * later by configuration alone - no code change.
  *
  *   WHATSAPP_ACCESS_TOKEN        system-user token
  *   WHATSAPP_PHONE_NUMBER_ID     the sending number's Phone Number ID
@@ -10,8 +10,10 @@
  *   WHATSAPP_TEMPLATE_LANG       template language code (default "en")
  *   WHATSAPP_API_VERSION         Graph API version (default "v21.0")
  *
- * Without WhatsApp, a console "dev" channel is available OUTSIDE production only, and can echo
- * the code back to the caller when PUBLIC_OTP_DEV_ECHO=1 (never honoured on Vercel production).
+ * Local development without WhatsApp: set OTP_DEV_ECHO=1. Nothing is sent; the code is returned in the API
+ * response so the flow can be tried. That switch is OFF by default and is ignored in production and on any
+ * hosted platform (see devEchoAllowed). The old PUBLIC_OTP_DEV_ECHO=1 name is still honoured. A code is never
+ * written to a log.
  */
 
 export interface DeliveryResult {
@@ -74,10 +76,10 @@ class WhatsAppCloudProvider implements OtpDeliveryProvider {
   }
 }
 
-class DevConsoleProvider implements OtpDeliveryProvider {
+/** Local development only: nothing is sent and nothing is logged; the route echoes the code (see devEchoAllowed). */
+class DevEchoProvider implements OtpDeliveryProvider {
   readonly name = "dev" as const;
-  async send(phone10: string, code: string): Promise<DeliveryResult> {
-    console.log(`[otp:dev] code for ${phone10}: ${code}`);
+  async send(): Promise<DeliveryResult> {
     return { ok: true };
   }
 }
@@ -86,18 +88,37 @@ export function whatsAppConfigured(env: NodeJS.ProcessEnv = process.env): boolea
   return Boolean(env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID);
 }
 
-export function devChannelAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.NODE_ENV !== "production" && env.VERCEL_ENV !== "production";
+/** Environment variables that only exist on hosted platforms. A hosted deployment never discloses codes. */
+const HOSTED_ENV_MARKERS = [
+  "VERCEL",
+  "VERCEL_ENV",
+  "RENDER",
+  "RAILWAY_ENVIRONMENT",
+  "FLY_APP_NAME",
+  "AWS_LAMBDA_FUNCTION_NAME",
+  "K_SERVICE",
+  "NETLIFY",
+  "DYNO",
+  "WEBSITE_SITE_NAME",
+];
+
+/** Production, or any recognised hosting platform. */
+export function isHostedOrProduction(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV === "production" || HOSTED_ENV_MARKERS.some((k) => Boolean(env[k]));
 }
 
-/** Whether the code may be echoed in the API response (local development only). */
+/**
+ * May a code be returned in the API response instead of being sent? Only on a developer's machine AND only
+ * when explicitly switched on with OTP_DEV_ECHO=1 (or the older PUBLIC_OTP_DEV_ECHO=1). Off by default.
+ */
 export function devEchoAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
-  return devChannelAllowed(env) && env.PUBLIC_OTP_DEV_ECHO === "1";
+  if (isHostedOrProduction(env)) return false;
+  return env.OTP_DEV_ECHO === "1" || env.PUBLIC_OTP_DEV_ECHO === "1";
 }
 
-/** The provider to use right now, or null when public OTP is not available (feature off). */
+/** The provider to use right now, or null when OTP delivery is not available. */
 export function getOtpDelivery(env: NodeJS.ProcessEnv = process.env): OtpDeliveryProvider | null {
   if (whatsAppConfigured(env)) return new WhatsAppCloudProvider();
-  if (devChannelAllowed(env)) return new DevConsoleProvider();
+  if (devEchoAllowed(env)) return new DevEchoProvider();
   return null;
 }

@@ -12,7 +12,7 @@ dashboardRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_DASHBOARD), async
   const sitesByPhase: Record<string, number> = Object.fromEntries(Object.values(SITC_PHASE).map((p) => [p, 0]));
   for (const site of sites) sitesByPhase[site.currentStage.phase] += 1;
 
-  const grouped = await prisma.complaint.groupBy({ by: ["status"], _count: { _all: true } });
+  const grouped = await prisma.complaint.groupBy({ by: ["status"], where: { archivedAt: null }, _count: { _all: true } });
   const complaintsByStatus: Record<string, number> = Object.fromEntries(
     Object.values(COMPLAINT_STATUS).map((s) => [s, 0]),
   );

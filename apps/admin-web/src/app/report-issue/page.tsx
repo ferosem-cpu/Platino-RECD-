@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ISSUE_CATEGORY_LABELS, REPORTER_TYPE_LABELS } from "@recd/shared";
+import { ISSUE_CATEGORY_LABELS, PUBLIC_OTP, REPORTER_TYPE_LABELS, canResend, otpExpiryText, resendLabel, tickCooldown } from "@recd/shared";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -21,7 +21,9 @@ async function publicApi<T>(path: string, body: unknown): Promise<T> {
       const first = Object.values(data.error.fieldErrors as Record<string, string[]>).flat()[0];
       if (first) msg = first;
     }
-    throw new Error(msg);
+    const err = new Error(msg) as Error & { retryAfterSeconds?: number };
+    if (typeof data.retryAfterSeconds === "number") err.retryAfterSeconds = data.retryAfterSeconds;
+    throw err;
   }
   return data as T;
 }
@@ -59,10 +61,11 @@ export default function ReportIssuePage() {
   const [info, setInfo] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
   const [devCode, setDevCode] = useState<string | undefined>();
+  const [expiresIn, setExpiresIn] = useState<number>(PUBLIC_OTP.EXPIRY_SECONDS);
 
   useEffect(() => {
     if (cooldown <= 0) return;
-    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    const t = setTimeout(() => setCooldown((c) => tickCooldown(c)), 1000);
     return () => clearTimeout(t);
   }, [cooldown]);
 
@@ -72,13 +75,16 @@ export default function ReportIssuePage() {
     setError(null);
     setInfo(null);
     try {
-      const r = await publicApi<{ message: string; resendAfterSeconds: number; devCode?: string }>("/otp/request", { serialNo, phone });
+      const r = await publicApi<{ message: string; resendAfterSeconds: number; expiresInSeconds?: number; devCode?: string }>("/otp/request", { serialNo, phone });
       setInfo(r.message);
       setCooldown(r.resendAfterSeconds);
+      setExpiresIn(r.expiresInSeconds ?? PUBLIC_OTP.EXPIRY_SECONDS);
       setDevCode(r.devCode);
       setCode("");
       setStep("otp");
     } catch (err) {
+      const wait = (err as { retryAfterSeconds?: number }).retryAfterSeconds;
+      if (wait && wait < 120) setCooldown(wait);
       setError(err instanceof Error ? err.message : "Could not send the code");
     } finally {
       setLoading(false);
@@ -162,13 +168,14 @@ export default function ReportIssuePage() {
               <input required inputMode="numeric" maxLength={6} className={input + " tracking-[0.4em] text-center text-lg"} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
             </div>
             {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{error}</div>}
+            <p className="text-xs text-gray-500">The code is valid for {otpExpiryText(expiresIn)}. If it expires or is wrong too many times, request a new one.</p>
             <button type="submit" disabled={loading || code.length !== 6} className="btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-50">
               {loading ? "Verifying…" : "Verify"}
             </button>
             <div className="flex items-center justify-between text-xs">
               <button type="button" onClick={() => { setStep("identify"); setError(null); }} className="font-medium text-gray-500">Change details</button>
-              <button type="button" disabled={cooldown > 0 || loading} onClick={() => requestOtp()} className="font-medium text-[var(--theme-accent)] disabled:text-gray-400">
-                {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+              <button type="button" disabled={!canResend(cooldown, loading)} onClick={() => requestOtp()} className="font-medium text-[var(--theme-accent)] disabled:text-gray-400">
+                {resendLabel(cooldown)}
               </button>
             </div>
           </form>

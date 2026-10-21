@@ -1,9 +1,12 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { registerVendorSchema, archiveVendorSchema, PERMISSION_KEY, ROLE_KEY, VENDOR_STATUS } from "@recd/shared";
+import { registerVendorSchema, archiveVendorSchema, mobileStorageVariants, normalizeIndianMobile, PERMISSION_KEY, ROLE_KEY, USER_AUDIT_ACTION, VENDOR_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
+import { isUserEmailConflict, isUserPhoneConflict } from "../lib/uniqueViolations";
+import { generateTempPassword } from "../lib/userAdmin";
+import { logUserAuditStrict } from "../lib/audit";
 
 export const vendorsRouter = Router();
 
@@ -12,26 +15,56 @@ export const vendorsRouter = Router();
  * already exists. Shared between the approve route and staff directly adding a vendor
  * (which is created pre-approved, so it needs the same login-creation side effect).
  */
-async function createVendorContactLogin(vendor: { id: string; contactName: string; contactEmail: string; contactPhone: string | null }, createdById: string) {
+export interface VendorLoginResult {
+  contactLoginCreated: boolean;
+  tempPassword?: string;
+  /** Why no login was created (shown to staff); the vendor itself is unaffected. */
+  contactLoginSkippedReason?: string;
+}
+
+async function createVendorContactLogin(vendor: { id: string; contactName: string; contactEmail: string; contactPhone: string | null }, createdById: string): Promise<VendorLoginResult> {
+  // Exact match on the normalised (lower-case) address; a stored address that differs only by case is caught by the normalised unique index at insert (handled below).
   const emailTaken = await prisma.user.findUnique({ where: { email: vendor.contactEmail } });
-  if (emailTaken) return { contactLoginCreated: false, tempPassword: undefined as string | undefined };
+  if (emailTaken) {
+    return { contactLoginCreated: false, contactLoginSkippedReason: "A user with that email already exists, so no new login was created." };
+  }
+
+  // New vendors carry a normalised number already; an older record may hold the number in another
+  // format (normalise it) or none/an invalid one (the login is then created without a number - nothing is invented).
+  const phone = normalizeIndianMobile(vendor.contactPhone ?? "");
+  const phoneReason = "The vendor's mobile number is already used by another user, so no login was created. Change the number or add the engineer from the Users page.";
+  if (phone && (await prisma.user.findFirst({ where: { phone: { in: mobileStorageVariants(phone) } }, select: { id: true } }))) {
+    return { contactLoginCreated: false, contactLoginSkippedReason: phoneReason };
+  }
 
   const role = await prisma.role.findUniqueOrThrow({ where: { key: ROLE_KEY.ERECTION_ENGINEER } });
-  const tempPassword = Math.random().toString(36).slice(2, 10);
+  const tempPassword = generateTempPassword(); // CSPRNG, same as the Users page
   const passwordHash = await bcrypt.hash(tempPassword, 10);
-  await prisma.user.create({
-    data: {
-      name: vendor.contactName,
-      email: vendor.contactEmail,
-      phone: vendor.contactPhone,
-      roleId: role.id,
-      vendorId: vendor.id,
-      passwordHash,
-      mustChangePassword: true,
-      title: "Erection Engineer",
-      createdById,
-    },
-  });
+  try {
+    // The login and its mandatory audit record are one transaction (an account is never created without its record).
+    await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          name: vendor.contactName,
+          email: vendor.contactEmail,
+          phone,
+          roleId: role.id,
+          vendorId: vendor.id,
+          passwordHash,
+          mustChangePassword: true,
+          title: "Erection Engineer",
+          createdById,
+        },
+      });
+      await logUserAuditStrict(tx, createdById, created.id, USER_AUDIT_ACTION.CREATED, { role: ROLE_KEY.ERECTION_ENGINEER, vendorId: vendor.id, via: "vendor_login_created" });
+    });
+  } catch (err) {
+    // Someone took the number between the check and the insert: a clear message, not a 500.
+    if (isUserPhoneConflict(err)) return { contactLoginCreated: false, contactLoginSkippedReason: phoneReason };
+    // Same address in another case, created at the same moment (the normalised unique index rejected it).
+    if (isUserEmailConflict(err)) return { contactLoginCreated: false, contactLoginSkippedReason: "A user with that email already exists, so no new login was created." };
+    throw err;
+  }
   return { contactLoginCreated: true, tempPassword };
 }
 
@@ -96,13 +129,14 @@ vendorsRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_VENDORS), async 
     },
   });
 
-  const { contactLoginCreated, tempPassword } = await createVendorContactLogin(vendor, req.auth!.userId);
+  const { contactLoginCreated, tempPassword, contactLoginSkippedReason } = await createVendorContactLogin(vendor, req.auth!.userId);
 
   res.status(201).json({
     id: vendor.id,
     name: vendor.name,
     status: vendor.status,
     contactLoginCreated,
+    contactLoginSkippedReason,
     contactEmail: vendor.contactEmail,
     tempPassword,
   });
@@ -121,12 +155,13 @@ vendorsRouter.post("/:id/approve", requirePermission(PERMISSION_KEY.MANAGE_VENDO
 
   // On approval the vendor's primary contact becomes a vendor-scoped erection-engineer login,
   // so "once approved, they can be added to the users list" happens automatically.
-  const { contactLoginCreated, tempPassword } = await createVendorContactLogin(vendor, req.auth!.userId);
+  const { contactLoginCreated, tempPassword, contactLoginSkippedReason } = await createVendorContactLogin(vendor, req.auth!.userId);
 
   res.json({
     id: vendor.id,
     status: VENDOR_STATUS.APPROVED,
     contactLoginCreated,
+    contactLoginSkippedReason,
     contactEmail: vendor.contactEmail,
     tempPassword,
   });
@@ -181,7 +216,12 @@ vendorsRouter.post("/:id/archive", requirePermission(PERMISSION_KEY.MANAGE_VENDO
       const result = await tx.site.updateMany({ where: { vendorId: id }, data: { vendorId: reassignToId } });
       count = result.count;
     }
-    await tx.user.updateMany({ where: { vendorId: id }, data: { isActive: false } });
+    // Every member login is switched off AND its sessions revoked (tokenVersion), with one audit record per account that was active.
+    const activeMembers = await tx.user.findMany({ where: { vendorId: id, isActive: true }, select: { id: true } });
+    await tx.user.updateMany({ where: { vendorId: id }, data: { isActive: false, tokenVersion: { increment: 1 } } });
+    for (const member of activeMembers) {
+      await logUserAuditStrict(tx, req.auth!.userId, member.id, USER_AUDIT_ACTION.DEACTIVATED, { via: "vendor_archived", vendorId: id });
+    }
     await tx.vendor.update({
       where: { id },
       data: { status: VENDOR_STATUS.ARCHIVED, archivedById: req.auth!.userId, archivedAt: new Date() },

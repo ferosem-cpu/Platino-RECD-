@@ -1,7 +1,11 @@
+import { amcDurationFields, eitherEndOrDuration, EITHER_END_OR_DURATION_MESSAGE } from "./amc";
+import { emailField } from "./userPolicy";
+import { complaintStatusSchema } from "./ticketPolicy";
 import { z } from "zod";
 
 export const loginSchema = z.object({
-  email: z.string().email(),
+  /** Normalised (trimmed, lower case) so the same address signs in however it is typed. */
+  email: emailField,
   password: z.string().min(8),
 });
 
@@ -19,16 +23,33 @@ export function normalizeIndianMobile(input: string): string | null {
   return /^[6-9]\d{9}$/.test(bare) ? bare : null;
 }
 
+/** The one message every mobile-number field (API and forms) shows for an invalid number. */
+export const INDIAN_MOBILE_MESSAGE = "Enter a valid 10-digit Indian mobile number";
+
 export const indianMobileSchema = z
-  .string()
+  .string({ required_error: INDIAN_MOBILE_MESSAGE, invalid_type_error: INDIAN_MOBILE_MESSAGE })
   .transform((v, ctx) => {
     const n = normalizeIndianMobile(v);
     if (!n) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid 10-digit Indian mobile number" });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: INDIAN_MOBILE_MESSAGE });
       return z.NEVER;
     }
     return n;
   });
+
+/**
+ * The ways one 10-digit mobile number may already be stored in older rows (before numbers were
+ * normalised on save): bare, +91, 91 or 0 prefixed. Used to find an existing record for a
+ * normalised number - e.g. a customer login, or a duplicate-number check.
+ */
+export function mobileStorageVariants(normalized: string): string[] {
+  return [normalized, `+91${normalized}`, `91${normalized}`, `0${normalized}`];
+}
+
+/** True when a stored phone value (any legacy format) is the same number as `normalized`. */
+export function storedMobileMatches(stored: string | null | undefined, normalized: string): boolean {
+  return !!stored && normalizeIndianMobile(stored) === normalized;
+}
 
 /** RECD serial: 3-40 chars, letters/digits and - _ / . only; stored upper-case. */
 export const recdSerialSchema = z
@@ -39,23 +60,25 @@ export const recdSerialSchema = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9\-_/.]*$/, "Use letters, digits and - _ / . only")
   .transform((v) => v.toUpperCase());
 
+// Customer / phone-only logins take the same Indian mobile rule as everything else and match the
+// stored number after normalising it, so "+91 98...", "098..." and "98..." are one and the same person.
 export const requestOtpSchema = z.object({
-  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
+  phone: indianMobileSchema,
 });
 
 export const verifyOtpSchema = z.object({
-  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
+  phone: indianMobileSchema,
   code: z.string().length(6),
 });
 
 export const customerRegisterSchema = z.object({
   orderNumber: z.string().min(1),
-  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
+  phone: indianMobileSchema,
 });
 
 export const customerVerifySchema = z.object({
   orderNumber: z.string().min(1),
-  phone: z.string().regex(MOBILE_NUMBER_REGEX, "Enter a valid mobile number"),
+  phone: indianMobileSchema,
   code: z.string().length(6),
 });
 
@@ -175,7 +198,8 @@ export const updateSiteDetailsSchema = z.object({
 
 export const createSiteContactSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  phone: z.string().optional(),
+  /** Mandatory, Indian mobile, stored as 10 digits. On update (partial) it is only checked when sent. */
+  phone: indianMobileSchema,
   email: z.string().email().optional(),
   role: z.string().optional(),
 });
@@ -219,11 +243,14 @@ export const createComplaintSchema = z.object({
 });
 
 export const updateComplaintStatusSchema = z.object({
-  status: z.string(),
+  /** One of the nine existing statuses (ticketPolicy.ts); anything else is a 400. */
+  status: complaintStatusSchema,
   rootCause: z.string().optional(),
   resolutionNotes: z.string().optional(),
   remarks: z.string().optional(),
   serviceReportUrl: z.string().optional(),
+  /** Required (checked by the API against the ticket's current status) when a CLOSED ticket is reopened; recorded in the history. */
+  reopenReason: z.string().max(1000).optional(),
   /** Only complaint managers (service team / management) may (re)assign; field engineers cannot. */
   assignedToId: z.string().nullable().optional(),
 });
@@ -246,7 +273,15 @@ export const createAmcOrderSchema = z.object({
   qty: z.number().int().positive(),
   amcFrequencyPerYear: z.number().int().positive(),
   amcType: z.enum(["camc", "namc"]),
-});
+  /** RECD units (by RecdUnit.id) this contract covers; all must belong to `customerId`. */
+  unitIds: z
+    .array(z.string().min(1))
+    .max(100)
+    .default([])
+    .refine((ids) => new Set(ids).size === ids.length, { message: "A unit can only be listed once" }),
+  /** Explicit contract period (Requirement 7). All optional: with none given the period starts on the PO date and lasts the configured duration. */
+  ...amcDurationFields,
+}).refine(eitherEndOrDuration, { message: EITHER_END_OR_DURATION_MESSAGE });
 
 export const resolvePendingActionSchema = z.object({
   resolution: z.string(),
@@ -254,22 +289,27 @@ export const resolvePendingActionSchema = z.object({
 });
 
 export const createUserSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
+  name: z.string().trim().min(1),
+  email: emailField,
   roleKey: z.string(),
   /** Mandatory: it is the contact number for reminders/OTP. Normalised to 10 digits. */
   phone: indianMobileSchema,
   title: z.string().optional(),
   /** Required when adding an erection engineer who belongs to an approved vendor. */
   vendorId: z.string().optional(),
+  /** Required (and only allowed) for a customer account. */
+  customerId: z.string().optional(),
 });
 
 export const updateUserSchema = z.object({
-  name: z.string().min(1).optional(),
-  email: z.string().email().optional(),
+  name: z.string().trim().min(1).optional(),
+  email: emailField.optional(),
   roleKey: z.string().optional(),
   phone: indianMobileSchema.optional(),
   title: z.string().optional(),
+  /** undefined = keep, null = remove, string = set (validated against the destination role by the server). */
+  vendorId: z.string().nullable().optional(),
+  customerId: z.string().nullable().optional(),
 });
 
 export const notificationPreferenceSchema = z.object({
@@ -280,17 +320,20 @@ export const createCustomerSchema = z.object({
   name: z.string().min(1),
   address: z.string().optional(),
   contactName: z.string().min(1),
-  // Phone is the customer's login credential (Order ID + phone -> OTP), so it is required.
-  contactPhone: z.string().min(6),
-  contactEmail: z.string().email().optional(),
+  // Phone is the customer's login credential (Order ID + phone -> OTP), so it is required and must be
+  // a valid Indian mobile number; it is stored as 10 digits so login can match it.
+  contactPhone: indianMobileSchema,
+  contactEmail: emailField.optional(),
 });
 
 export const updateCustomerSchema = z.object({
   name: z.string().min(1).optional(),
   address: z.string().optional(),
+  /** Which contact the contact* fields change. Omitted = the customer's primary (oldest) contact. */
+  contactId: z.string().min(1).optional(),
   contactName: z.string().min(1).optional(),
-  contactPhone: z.string().min(6).optional(),
-  contactEmail: z.string().email().optional(),
+  contactPhone: indianMobileSchema.optional(),
+  contactEmail: emailField.optional(),
 });
 
 export const createProductSchema = z.object({
@@ -311,8 +354,9 @@ export const registerVendorSchema = z.object({
   name: z.string().min(1),
   contactName: z.string().min(1),
   // Email is the vendor contact's login once approved, so it must be unique + valid.
-  contactEmail: z.string().email(),
-  contactPhone: z.string().optional(),
+  contactEmail: emailField,
+  /** Mandatory for new vendors: Indian mobile, stored as 10 digits (also used for the vendor's login user). */
+  contactPhone: indianMobileSchema,
   address: z.string().optional(),
 });
 

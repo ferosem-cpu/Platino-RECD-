@@ -1,25 +1,16 @@
 import { Router } from "express";
-import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, ROLE_KEY, STAGE_KEY } from "@recd/shared";
-import { Prisma } from "@prisma/client";
+import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
+import { findTakenSerials, takenSerialsMessage } from "../lib/serials";
+import { isSerialConflict, SERIAL_RACE_MESSAGE } from "../lib/uniqueViolations";
+import { assertOrderReferences, createNewOrder, OrderCreationError } from "../lib/orderCreation";
+import { SITE_PEOPLE_INCLUDE } from "../lib/safeSelect";
 
 export const ordersRouter = Router();
 ordersRouter.use(authenticate);
 
-const ADMIN_ROLES_FOR_PO_OVERRIDE: string[] = [ROLE_KEY.SUPER_ADMIN, ROLE_KEY.OWNER_ADMIN, ROLE_KEY.MANAGEMENT];
-
-/** Returns the already-registered serials among `serials` (serials are globally unique). */
-async function findTakenSerials(serials: string[]): Promise<string[]> {
-  if (!serials.length) return [];
-  const rows = await prisma.recdUnit.findMany({ where: { serialNo: { in: serials } }, select: { serialNo: true } });
-  return rows.map((r) => r.serialNo!).filter(Boolean);
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
-}
 
 ordersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
   const where = req.auth!.customerId ? { customerId: req.auth!.customerId } : {};
@@ -39,7 +30,7 @@ ordersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async 
       customer: { include: { contacts: { select: { id: true, name: true, phone: true, email: true } } } },
       product: true,
       salesEngineer: { select: { id: true, name: true } },
-      site: { include: { currentStage: true, assignedEngineer: true, vendor: true } },
+      site: { include: SITE_PEOPLE_INCLUDE },
       lineItems: { include: { product: true }, orderBy: { createdAt: "asc" } },
       units: { include: { product: { select: { id: true, name: true, model: true } } }, orderBy: { createdAt: "asc" } },
     },
@@ -65,71 +56,41 @@ ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (r
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
 
-  const taken = await findTakenSerials(data.recdSerials);
-  if (taken.length) {
-    return res.status(409).json({ error: `Serial number already registered: ${taken.join(", ")}` });
-  }
-
-  // Duplicate PO guard: same customer + same PO number. Admins may knowingly override, in
-  // which case the order is flagged so it shows up in review.
-  const dupePo = await prisma.order.findFirst({
-    where: { customerId: data.customerId, poNumber: { equals: data.poNumber, mode: "insensitive" } },
-    select: { orderNumber: true },
-  });
-  let poDuplicateFlag = false;
-  if (dupePo) {
-    const mayOverride = ADMIN_ROLES_FOR_PO_OVERRIDE.includes(req.auth!.roleKey);
-    if (!(data.allowDuplicatePo && mayOverride)) {
-      return res.status(409).json({
-        error: `PO ${data.poNumber} already exists for this customer (order ${dupePo.orderNumber}).` +
-          (mayOverride ? " Tick 'allow duplicate PO' to create it anyway." : " Ask an admin to override if this is intentional."),
-        code: "DUPLICATE_PO",
-      });
-    }
-    poDuplicateFlag = true;
-  }
-
-  const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
-  const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-  let order;
   try {
-    order = await prisma.order.create({
-      data: {
-        orderNumber,
-        customerId: data.customerId,
-        productId: data.productId,
-        quantity: data.quantity,
-        value: data.value,
-        orderDate: data.orderDate ? new Date(data.orderDate) : undefined,
-        promisedDeliveryDate: data.promisedDeliveryDate ? new Date(data.promisedDeliveryDate) : undefined,
-        plannedExhaustHookupType: data.plannedExhaustHookupType,
-        poNumber: data.poNumber,
-        poDate: data.poDate ? new Date(data.poDate) : undefined,
-        poDuplicateFlag,
-        salesEngineerId: req.auth!.userId,
-        site: { create: { currentStageId: firstStage.id } },
-      },
-      include: { site: true },
-    });
-    await prisma.recdUnit.createMany({
-      data: data.recdSerials.map((serialNo) => ({
-        serialNo,
-        orderId: order!.id,
-        siteId: order!.site?.id,
-        productId: data.productId,
-      })),
-    });
-  } catch (err) {
-    // Lost a race with another request registering the same serial.
-    if (isUniqueViolation(err)) {
-      if (order) await prisma.order.delete({ where: { id: order.id } }).catch(() => undefined);
-      return res.status(409).json({ error: "One of those serial numbers was just registered by someone else" });
+    // Unknown customer / product is a clean 400 (see lib/orderCreation.ts for the shared creation rules).
+    await assertOrderReferences(prisma, data.customerId, [data.productId]);
+
+    const taken = await findTakenSerials(data.recdSerials);
+    if (taken.length) {
+      return res.status(409).json({ error: takenSerialsMessage(taken) });
     }
+
+    // Duplicate-PO guard (same customer, case-insensitive, trimmed), checked INSIDE the creating transaction under a
+    // per-customer+PO lock so two simultaneous requests cannot both pass. Admins may knowingly override, in which case
+    // the order is flagged so it shows up in review. Order, site and units are saved together: if a request racing us
+    // registers one of the serials first, the unique index rejects ours and the whole transaction rolls back.
+    const order = await createNewOrder({
+      customerId: data.customerId,
+      productId: data.productId,
+      quantity: data.quantity,
+      value: data.value,
+      orderDate: data.orderDate,
+      promisedDeliveryDate: data.promisedDeliveryDate,
+      plannedExhaustHookupType: data.plannedExhaustHookupType,
+      poNumber: data.poNumber,
+      poDate: data.poDate,
+      serials: data.recdSerials,
+      salesEngineerId: req.auth!.userId,
+      allowDuplicatePo: data.allowDuplicatePo,
+      roleKey: req.auth!.roleKey,
+    });
+    res.status(201).json(order);
+  } catch (err) {
+    // Say which constraint actually fired; anything else is a real failure, not a validation error.
+    if (err instanceof OrderCreationError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+    if (isSerialConflict(err)) return res.status(409).json({ error: SERIAL_RACE_MESSAGE });
     throw err;
   }
-
-  res.status(201).json(order);
 });
 
 /** Adds another RECD unit to an existing order (same order/site, e.g. a 500kva + a 380kva
@@ -145,6 +106,9 @@ ordersRouter.post("/:id/line-items", requirePermission(PERMISSION_KEY.MANAGE_ORD
   if (req.auth!.customerId && order.customerId !== req.auth!.customerId) {
     return res.status(403).json({ error: "Forbidden" });
   }
+
+  const product = await prisma.product.findUnique({ where: { id: parsed.data.productId }, select: { id: true } });
+  if (!product) return res.status(400).json({ error: "Product not found" });
 
   const taken = await findTakenSerials(parsed.data.recdSerials);
   if (taken.length) return res.status(409).json({ error: `Serial number already registered: ${taken.join(", ")}` });
@@ -165,7 +129,7 @@ ordersRouter.post("/:id/line-items", requirePermission(PERMISSION_KEY.MANAGE_ORD
       return li;
     });
   } catch (err) {
-    if (isUniqueViolation(err)) return res.status(409).json({ error: "One of those serial numbers was just registered by someone else" });
+    if (isSerialConflict(err)) return res.status(409).json({ error: SERIAL_RACE_MESSAGE });
     throw err;
   }
 
@@ -177,6 +141,16 @@ ordersRouter.delete("/:id/line-items/:lineItemId", requirePermission(PERMISSION_
   const lineItemId = asString(req.params.lineItemId);
   const lineItem = await prisma.orderLineItem.findUnique({ where: { id: lineItemId } });
   if (!lineItem || lineItem.orderId !== orderId) return res.status(404).json({ error: "Line item not found" });
+
+  const amcLinks = await prisma.amcOrderUnit.count({ where: { unit: { lineItemId } } });
+  if (amcLinks) {
+    return res.status(409).json({ error: "Cannot remove this unit - it is covered by an AMC order. Remove it from the AMC first." });
+  }
+
+  const warrantyHistory = await prisma.warrantyHistory.count({ where: { unit: { lineItemId } } });
+  if (warrantyHistory) {
+    return res.status(409).json({ error: "Cannot remove this unit - it has warranty history, which is kept for audit." });
+  }
 
   await prisma.$transaction([
     prisma.recdUnit.deleteMany({ where: { lineItemId } }),
@@ -208,6 +182,17 @@ ordersRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), asy
     return res.status(400).json({
       error: `Cannot delete this order - it has linked records: ${complaintCount} complaint(s). Resolve or remove those first.`,
     });
+  }
+
+  const amcLinks = await prisma.amcOrderUnit.count({ where: { unit: { orderId } } });
+  if (amcLinks) {
+    return res.status(400).json({
+      error: `Cannot delete this order - ${amcLinks} of its RECD unit(s) are covered by an AMC order.`,
+    });
+  }
+
+  if (await prisma.warrantyHistory.count({ where: { unit: { orderId } } })) {
+    return res.status(409).json({ error: "Cannot delete this order - one of its RECD units has warranty history, which is kept for audit." });
   }
 
   await prisma.$transaction(async (tx) => {

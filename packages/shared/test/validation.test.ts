@@ -6,6 +6,7 @@ import {
   recdSerialSchema,
   createOrderSchema,
   addOrderLineItemSchema,
+  createAmcOrderSchema,
   createUserSchema,
 } from "../src/schemas";
 
@@ -59,4 +60,13 @@ test("createUserSchema makes mobile mandatory and normalises it", () => {
   assert.equal(ok.phone, "9884977994");
   assert.equal(createUserSchema.safeParse({ name: "A", email: "a@b.co", roleKey: "sales" }).success, false);
   assert.equal(createUserSchema.safeParse({ name: "A", email: "a@b.co", roleKey: "sales", phone: "12" }).success, false);
+});
+
+test("createAmcOrderSchema: unitIds optional, defaults to none, rejects repeats", () => {
+  const base = { poNo: "P1", poDate: "2026-01-01T00:00:00.000Z", customerId: "c", location: "L", item: "RECD", qty: 2, amcFrequencyPerYear: 4, amcType: "camc" };
+  const none = createAmcOrderSchema.parse(base);
+  assert.deepEqual(none.unitIds, []);
+  assert.deepEqual(createAmcOrderSchema.parse({ ...base, unitIds: ["u1", "u2"] }).unitIds, ["u1", "u2"]);
+  assert.equal(createAmcOrderSchema.safeParse({ ...base, unitIds: ["u1", "u1"] }).success, false);
+  assert.equal(createAmcOrderSchema.safeParse({ ...base, unitIds: [""] }).success, false);
 });

@@ -14,12 +14,11 @@ import {
   PUBLIC_OTP,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
-import { logComplaintEvent } from "../lib/ticketEvents";
+import { logComplaintEventStrict } from "../lib/ticketEvents";
 import { notifyMany, ticketRecipients } from "../lib/ticketNotify";
 import { rateLimit } from "../middleware/rateLimit";
 import {
   checkOtpAttemptable,
-  clientIp,
   decideOtpRequest,
   generateOtpCode,
   generateSessionToken,
@@ -64,7 +63,8 @@ publicComplaintsRouter.post("/otp/request", async (req, res) => {
   const parsed = publicOtpRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { serialNo, phone } = parsed.data;
-  const ip = clientIp(req.headers, req.ip);
+  // req.ip honours X-Forwarded-For only for the proxies named by TRUST_PROXY, so a client cannot choose the address its requests are counted under.
+  const ip = req.ip || null;
 
   const since = new Date(Date.now() - HOUR_MS);
   const [phoneLastHour, serialLastHour, ipLastHour, lastForPhone] = await Promise.all([
@@ -112,7 +112,8 @@ publicComplaintsRouter.post("/otp/request", async (req, res) => {
   let devCode: string | undefined;
   if (known) {
     const result = await delivery.send(phone, code);
-    await prisma.publicOtp.update({ where: { id }, data: { deliveryStatus: result.ok ? "sent" : "failed" } });
+    // "skipped" for the local-development echo channel: nothing was actually sent to a phone.
+    await prisma.publicOtp.update({ where: { id }, data: { deliveryStatus: !result.ok ? "failed" : delivery.name === "dev" ? "skipped" : "sent" } });
     if (!result.ok) console.error(`[otp] delivery failed for OTP ${id} via ${delivery.name}: ${result.error}`);
     if (result.ok && delivery.name === "dev" && devEchoAllowed()) devCode = code;
   }
@@ -202,12 +203,12 @@ publicComplaintsRouter.post("/", async (req, res) => {
 
   const unit = await prisma.recdUnit.findUnique({
     where: { id: otp.unitId },
-    include: { order: { select: { customerId: true } }, site: { select: { id: true, regionId: true } } },
+    include: { order: { select: { customerId: true } }, site: { select: { id: true, regionId: true, companyName: true } } },
   });
   if (!unit || unit.status !== "active") return res.status(400).json({ error: "This RECD is no longer active" });
 
   const open = await prisma.complaint.findFirst({
-    where: { unitId: unit.id, status: { notIn: CLOSED } },
+    where: { unitId: unit.id, status: { notIn: CLOSED }, archivedAt: null },
     select: { ticketNumber: true },
   });
   if (open) {
@@ -235,31 +236,43 @@ publicComplaintsRouter.post("/", async (req, res) => {
   for (let attempt = 0; attempt < 3 && !complaint; attempt++) {
     const ticketNumber = `TCK-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
     try {
-      complaint = await prisma.complaint.create({
-        data: {
-          ticketNumber,
-          customerId: unit.order.customerId,
-          siteId: unit.siteId,
-          unitId: unit.id,
-          category,
-          issueCategory: d.issueCategory,
-          description: d.description,
-          severity: "medium",
-          status: COMPLAINT_STATUS.OPEN,
-          attachmentUrl: d.attachmentUrl,
-          source: COMPLAINT_SOURCE.PUBLIC,
-          reporterName: d.reporterName,
-          reporterPhone: otp.phone,
-          reporterType: d.reporterType,
-          reporterVerifiedAt: otp.verifiedAt,
-        },
+      // ONE transaction: the ticket and its CREATED history row commit together (a failed history write leaves no ticket behind).
+      complaint = await prisma.$transaction(async (tx) => {
+        const created = await tx.complaint.create({
+          data: {
+            ticketNumber,
+            customerId: unit.order.customerId,
+            siteId: unit.siteId,
+            unitId: unit.id,
+            category,
+            issueCategory: d.issueCategory,
+            description: d.description,
+            severity: "medium",
+            status: COMPLAINT_STATUS.OPEN,
+            attachmentUrl: d.attachmentUrl,
+            source: COMPLAINT_SOURCE.PUBLIC,
+            reporterName: d.reporterName,
+            reporterPhone: otp.phone,
+            reporterType: d.reporterType,
+            reporterVerifiedAt: otp.verifiedAt,
+          },
+        });
+        await logComplaintEventStrict(tx, {
+          complaintId: created.id,
+          type: COMPLAINT_EVENT.CREATED,
+          toValue: created.status,
+          actorLabel: `${d.reporterName} (public, ${d.reporterType})`,
+          // What was reported, as it was at the time (the ticket's links are cleared if the unit or site is later deleted).
+          detail: { source: COMPLAINT_SOURCE.PUBLIC, reporterPhone: otp.phone, serialNo: unit.serialNo, siteName: unit.site?.companyName ?? null, siteId: unit.siteId, unitId: unit.id },
+        });
+        return created;
       });
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
       // Either a ticket-number collision (retry) or the one-open-ticket-per-unit index (a
       // concurrent request won): distinguish by looking for the open ticket.
       const raced = await prisma.complaint.findFirst({
-        where: { unitId: unit.id, status: { notIn: CLOSED } },
+        where: { unitId: unit.id, status: { notIn: CLOSED }, archivedAt: null },
         select: { ticketNumber: true },
       });
       if (raced) {
@@ -271,14 +284,6 @@ publicComplaintsRouter.post("/", async (req, res) => {
     }
   }
   if (!complaint) return res.status(500).json({ error: "Could not create the ticket. Please try again." });
-
-  await logComplaintEvent({
-    complaintId: complaint.id,
-    type: COMPLAINT_EVENT.CREATED,
-    toValue: complaint.status,
-    actorLabel: `${d.reporterName} (public, ${d.reporterType})`,
-    detail: { source: COMPLAINT_SOURCE.PUBLIC, reporterPhone: otp.phone },
-  });
 
   // Service desk, Service Managers, Management and the site region's Regional Managers.
   try {

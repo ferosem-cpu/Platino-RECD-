@@ -5,12 +5,9 @@
  */
 import { createHmac, randomBytes, randomInt, timingSafeEqual, createHash } from "crypto";
 import { PUBLIC_OTP } from "@recd/shared";
+import { otpHmacSecret } from "./otpSecret";
 
-function secret(): string {
-  const s = process.env.JWT_SECRET;
-  if (!s) throw new Error("JWT_SECRET is not set - cannot hash public OTP codes.");
-  return s;
-}
+const secret = otpHmacSecret; // OTP_HMAC_SECRET when set, otherwise JWT_SECRET (lib/otpSecret.ts)
 
 /** Cryptographically random 6-digit code (leading zeros preserved). */
 export function generateOtpCode(): string {
@@ -79,11 +76,4 @@ export function decideOtpRequest(i: ThrottleInput): ThrottleDecision {
     return { allowed: false, reason: "limit", retryAfterSeconds: 3600 };
   }
   return { allowed: true };
-}
-
-/** Best-effort client IP. On Vercel x-forwarded-for is set by the platform. */
-export function clientIp(headers: Record<string, string | string[] | undefined>, fallback?: string): string | null {
-  const xff = headers["x-forwarded-for"];
-  const first = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim();
-  return first || (headers["x-real-ip"] as string | undefined) || fallback || null;
 }

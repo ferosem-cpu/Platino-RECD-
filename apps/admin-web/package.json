@@ -6,7 +6,8 @@
     "dev": "next dev -p 6001",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@recd/shared": "*",

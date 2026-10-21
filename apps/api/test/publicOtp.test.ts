@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret";
 import {
-  checkOtpAttemptable, clientIp, decideOtpRequest, generateOtpCode, generateSessionToken,
+  checkOtpAttemptable, decideOtpRequest, generateOtpCode, generateSessionToken,
   hashOtpCode, hashSessionToken, verifyOtpCode,
 } from "../src/lib/publicOtp";
-import { buildWhatsAppOtpPayload, devChannelAllowed, devEchoAllowed, getOtpDelivery } from "../src/lib/otpDelivery";
+import { buildWhatsAppOtpPayload, devEchoAllowed, getOtpDelivery } from "../src/lib/otpDelivery";
 
 test("OTP codes are 6 digits", () => {
   for (let i = 0; i < 50; i++) assert.match(generateOtpCode(), /^\d{6}$/);
@@ -44,9 +44,8 @@ test("request throttling: cooldown and hourly limits", () => {
   assert.ok(!decideOtpRequest({ ...ok, ipLastHour: 20 }).allowed);
 });
 
-test("clientIp prefers first x-forwarded-for hop", () => {
-  assert.equal(clientIp({ "x-forwarded-for": "1.2.3.4, 5.6.7.8" }, "9.9.9.9"), "1.2.3.4");
-  assert.equal(clientIp({}, "9.9.9.9"), "9.9.9.9");
+test("the spoofable x-forwarded-for helper is gone: the client address comes from req.ip, which Express derives only via TRUST_PROXY", () => {
+  assert.equal((require("../src/lib/publicOtp") as Record<string, unknown>).clientIp, undefined);
 });
 
 test("WhatsApp payload targets +91 number with code in body and button", () => {
@@ -56,12 +55,14 @@ test("WhatsApp payload targets +91 number with code in body and button", () => {
   assert.match(JSON.stringify(p), /123456/);
 });
 
-test("delivery selection never enables the dev channel in production", () => {
+test("delivery selection: WhatsApp when configured; the dev channel ONLY with the explicit opt-in and never hosted", () => {
   assert.equal(getOtpDelivery({ NODE_ENV: "production" } as any), null);
   assert.equal(getOtpDelivery({ NODE_ENV: "production", VERCEL_ENV: "production" } as any), null);
   assert.equal(getOtpDelivery({ NODE_ENV: "production", WHATSAPP_ACCESS_TOKEN: "t", WHATSAPP_PHONE_NUMBER_ID: "p" } as any)?.name, "whatsapp");
-  assert.ok(getOtpDelivery({ NODE_ENV: "development" } as any));
-  assert.ok(!devChannelAllowed({ NODE_ENV: "development", VERCEL_ENV: "production" } as any));
+  assert.equal(getOtpDelivery({ NODE_ENV: "development" } as any), null, "development alone no longer enables a fake channel");
+  assert.equal(getOtpDelivery({ NODE_ENV: "development", OTP_DEV_ECHO: "1" } as any)?.name, "dev");
+  assert.equal(getOtpDelivery({ NODE_ENV: "development", OTP_DEV_ECHO: "1", VERCEL: "1" } as any), null);
   assert.ok(!devEchoAllowed({ NODE_ENV: "development" } as any));
   assert.ok(devEchoAllowed({ NODE_ENV: "development", PUBLIC_OTP_DEV_ECHO: "1" } as any));
+  assert.ok(!devEchoAllowed({ NODE_ENV: "development", VERCEL_ENV: "production", PUBLIC_OTP_DEV_ECHO: "1" } as any));
 });

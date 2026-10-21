@@ -18,6 +18,9 @@ import { api } from "@/lib/apiClient";
 import AgentProvidersSettings from "@/components/AgentProvidersSettings";
 import AgentVisibilitySettings from "@/components/AgentVisibilitySettings";
 import SlaSettings from "@/components/SlaSettings";
+import ReminderSettings from "@/components/ReminderSettings";
+import AmcSettings from "@/components/AmcSettings";
+import WarrantySettings from "@/components/WarrantySettings";
 
 interface CompanyLetterhead {
   legalName: string;
@@ -472,6 +475,9 @@ export default function SettingsPage() {
       )}
 
       <SlaSettings />
+      <ReminderSettings />
+      <AmcSettings />
+      <WarrantySettings />
       <AgentVisibilitySettings />
       <AgentProvidersSettings />
     </div>

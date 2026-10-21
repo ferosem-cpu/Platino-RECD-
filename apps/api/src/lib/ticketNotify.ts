@@ -10,7 +10,9 @@ export async function ticketRecipients(
   audience: Audience,
   opts: { regionId?: string | null; assignedToId?: string | null },
 ): Promise<string[]> {
-  const regionManagers = opts.regionId ? [{ regionsManaged: { some: { regionId: opts.regionId } } }] : [];
+  // Existing ticket alerts go to the region's REGIONAL Managers only. Service Managers mapped to a region (Requirement 6) are
+  // reached by the reminder process (lib/reminders.ts); this keeps the ticket-age escalation exactly as it was.
+  const regionManagers = opts.regionId ? [{ regionsManaged: { some: { regionId: opts.regionId } }, role: { key: ROLE_KEY.REGIONAL_MANAGER } }] : [];
   let where: Prisma.UserWhereInput;
   if (audience === "raised") {
     where = {

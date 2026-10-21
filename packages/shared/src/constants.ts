@@ -66,6 +66,12 @@ export const ROLE_KEY = {
 } as const;
 export type RoleKey = (typeof ROLE_KEY)[keyof typeof ROLE_KEY];
 
+/** Roles that may knowingly create a second order for the same customer + PO number (enforced by the API; the Orders
+ * form uses the same list only to decide whether to show the override checkbox). */
+export const PO_DUPLICATE_OVERRIDE_ROLE_KEYS: readonly string[] = [ROLE_KEY.SUPER_ADMIN, ROLE_KEY.OWNER_ADMIN, ROLE_KEY.MANAGEMENT];
+export const canOverrideDuplicatePo = (roleKey: string | null | undefined): boolean =>
+  !!roleKey && PO_DUPLICATE_OVERRIDE_ROLE_KEYS.includes(roleKey);
+
 export const PERMISSION_KEY = {
   VIEW_SITE_STATUS: "view_site_status",
   CHANGE_SITE_STATUS: "change_site_status",
@@ -85,6 +91,8 @@ export const PERMISSION_KEY = {
   MANAGE_AMC_ORDERS: "manage_amc_orders",
   /** Create/rename/deactivate Regions and map Regional Managers to them. */
   MANAGE_REGIONS: "manage_regions",
+  /** Record and correct the warranty dates of RECD units (Requirement 8). Granted to super_admin, owner_admin and management. */
+  MANAGE_WARRANTY: "manage_warranty",
 } as const;
 export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];
 
@@ -256,6 +264,12 @@ export const USER_AUDIT_ACTION = {
   DEACTIVATED: "deactivated",
   ACTIVATED: "activated",
   PASSWORD_RESET: "password_reset",
+  /** The customer / vendor link of an account changed (a role change that cleared one is recorded here too). */
+  ASSOCIATION_CHANGED: "association_changed",
+  /** A privileged administrative action was REFUSED (never a change): who tried what, and why it was refused. */
+  ACTION_DENIED: "action_denied",
+  /** The account was deleted (e.g. a customer contact removed with its customer). The trail is kept: see UserAuditLog.targetIdRecorded. */
+  DELETED: "deleted",
 } as const;
 export type UserAuditAction = (typeof USER_AUDIT_ACTION)[keyof typeof USER_AUDIT_ACTION];
 
@@ -284,11 +298,47 @@ export const PUBLIC_OTP = {
   SESSION_SECONDS: 900,
 } as const;
 
+/**
+ * Login OTP policy (customer login and phone-only login) - shared so the server's enforcement and the
+ * countdowns/messages in the web and mobile apps cannot disagree.
+ */
+export const LOGIN_OTP_POLICY = {
+  CODE_LENGTH: 6,
+  EXPIRY_SECONDS: 600,
+  RESEND_COOLDOWN_SECONDS: 30,
+  /** Code requests (delivered or not) per user and purpose in any rolling hour. */
+  MAX_REQUESTS_PER_HOUR: 5,
+  /** Guesses allowed against one code. */
+  MAX_ATTEMPTS_PER_CODE: 5,
+  /** Guesses allowed per user and purpose in any rolling hour, across ALL codes - requesting a new code does not reset this. */
+  MAX_FAILED_PER_HOUR: 10,
+} as const;
+
+/** Why a login OTP is issued. A code is only ever accepted for the purpose it was issued for. */
+export const LOGIN_OTP_PURPOSE = {
+  CUSTOMER_LOGIN: "customer_login",
+  PHONE_LOGIN: "phone_login",
+} as const;
+export type LoginOtpPurpose = (typeof LOGIN_OTP_PURPOSE)[keyof typeof LOGIN_OTP_PURPOSE];
+
 export const COMPLAINT_EVENT = {
   CREATED: "created",
   STATUS_CHANGED: "status_changed",
   ASSIGNED: "assigned",
   ESCALATED: "escalated",
+  SERVICE_REPORT_CREATED: "service_report_created",
+  SERVICE_REPORT_SUBMITTED: "service_report_submitted",
+  SERVICE_REPORT_REOPENED: "service_report_reopened",
+  SERVICE_REPORT_SIGNED: "service_report_signed",
+  DUE_DATE_SET: "due_date_set",
+  /** Notes / remarks / root cause / resolution notes / uploaded report changed (the event names the fields, never the text). */
+  NOTES_UPDATED: "notes_updated",
+  /** The SLA escalation could not be delivered (no recipient, or every attempt failed): the level was NOT advanced and will be retried. */
+  ESCALATION_FAILED: "escalation_failed",
+  /** The ticket was archived (removed from working views, nothing deleted). The event records who, when and the optional reason. */
+  ARCHIVED: "archived",
+  /** An archived ticket was restored to the working views (who, when, the optional reason, the status it came back in). */
+  RESTORED: "restored",
 } as const;
 export type ComplaintEventType = (typeof COMPLAINT_EVENT)[keyof typeof COMPLAINT_EVENT];
 

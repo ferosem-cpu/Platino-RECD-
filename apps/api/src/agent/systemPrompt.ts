@@ -37,7 +37,7 @@ summaries (never guess ids or numbers, always search first).
 using the id a search_* tool gave you.
 
 You can also PROPOSE two kinds of new records with write tools:
-- create_order - a new sales order (and its site) for a customer, one product/quantity. \
+- create_order - a new sales order (and its site) for a customer, one product/quantity. Every unit needs its RECD serial number (recdSerials, one per unit, globally unique) - ask the user for them and never invent any. It also needs the customer's PO number (poNumber, required, ask the user, never invent one); a PO number already used by the same customer is refused, and the assistant cannot create a duplicate PO. \
 Resolve the customer and product by name first if the user didn't give exact ids - if \
 multiple records match, list them and ask which one rather than guessing. If no product \
 matches at all, offer to add it first via create_product. The order number is only \
