@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { setRecdSerialSchema, setWarrantySchema, PERMISSION_KEY, ROLE_KEY, SERVICE_REPORT_KIND, SERVICE_REPORT_STATUS } from "@recd/shared";
+import { canCorrectSerial, correctRecdSerialSchema, setRecdSerialSchema, setWarrantySchema, PERMISSION_KEY, RECD_UNIT_STATUS, ROLE_KEY, SERVICE_REPORT_KIND, SERVICE_REPORT_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { asString, asOptionalString } from "../lib/params";
 import { managedRegionIds } from "../lib/regions";
@@ -11,6 +11,9 @@ import { WarrantyError, describeWarranty, listWarrantyHistory, loadWarrantyPolic
 
 export const recdUnitsRouter = Router();
 recdUnitsRouter.use(authenticate);
+
+const ALREADY_HAS_SERIAL = "This unit already has a serial number";
+const STALE_SERIAL = "The serial number of this unit changed meanwhile - reload and try again.";
 
 const unitInclude = {
   product: { select: { id: true, name: true, model: true, warrantyMonths: true } },
@@ -208,16 +211,59 @@ recdUnitsRouter.put("/:id/serial", requirePermission(PERMISSION_KEY.MANAGE_ORDER
   const id = asString(req.params.id);
   const unit = await prisma.recdUnit.findUnique({ where: { id } });
   if (!unit) return res.status(404).json({ error: "RECD unit not found" });
-  if (unit.serialNo) return res.status(409).json({ error: "This unit already has a serial number" });
+  if (unit.serialNo) return res.status(409).json({ error: ALREADY_HAS_SERIAL });
 
   const clash = await prisma.recdUnit.findUnique({ where: { serialNo: parsed.data.serialNo } });
   if (clash) return res.status(409).json({ error: takenSerialsMessage([parsed.data.serialNo]) });
 
   try {
-    res.json(await prisma.recdUnit.update({ where: { id }, data: { serialNo: parsed.data.serialNo }, include: unitInclude }));
+    // Atomic: the write only happens while the unit STILL has no serial. Two simultaneous requests with different serials cannot both
+    // succeed - the loser matches no row (the read above is only for a friendly 404 / message).
+    const { count } = await prisma.recdUnit.updateMany({ where: { id, serialNo: null }, data: { serialNo: parsed.data.serialNo } });
+    if (count === 0) return res.status(409).json({ error: ALREADY_HAS_SERIAL });
+    res.json(await prisma.recdUnit.findUnique({ where: { id }, include: unitInclude }));
   } catch (err) {
     // Lost a race with another request registering the same serial.
     if (isSerialConflict(err)) return res.status(409).json({ error: takenSerialsMessage([parsed.data.serialNo]) });
+    throw err;
+  }
+});
+
+/**
+ * CORRECTS a serial that was entered wrongly (a data-entry mistake - it is not a replacement of the physical unit and not a move of the
+ * serial to another unit). Restricted to the administrative roles in SERIAL_CORRECTION_ROLE_KEYS (on top of `manage_orders`); a reason is
+ * mandatory and every correction is recorded (previous serial, new serial, actor, time) in RecdUnitSerialHistory in the same transaction.
+ * The caller names the serial it is looking at (`expectedSerialNo`); if the unit no longer carries it, nothing changes (409). Tickets,
+ * reports, AMC and warranty records reference the unit, so they follow the corrected serial; AMC reports keep their own serial snapshot.
+ */
+recdUnitsRouter.patch("/:id/serial", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  if (!canCorrectSerial(req.auth!.roleKey)) return res.status(403).json({ error: "Only an administrator can correct a serial number." });
+  const parsed = correctRecdSerialSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { expectedSerialNo, serialNo, reason } = parsed.data;
+  if (serialNo === expectedSerialNo) return res.status(400).json({ error: "The new serial number is the same as the current one." });
+
+  const id = asString(req.params.id);
+  const unit = await prisma.recdUnit.findUnique({ where: { id } });
+  if (!unit) return res.status(404).json({ error: "RECD unit not found" });
+  if (!unit.serialNo) return res.status(409).json({ error: "This unit has no serial number yet - enter it instead of correcting it." });
+  if (unit.status !== RECD_UNIT_STATUS.ACTIVE) return res.status(409).json({ error: "A retired unit keeps its serial number." });
+  if (unit.serialNo !== expectedSerialNo) return res.status(409).json({ error: STALE_SERIAL });
+
+  const clash = await prisma.recdUnit.findUnique({ where: { serialNo } });
+  if (clash) return res.status(409).json({ error: takenSerialsMessage([serialNo]) });
+
+  try {
+    const changed = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.recdUnit.updateMany({ where: { id, serialNo: expectedSerialNo, status: RECD_UNIT_STATUS.ACTIVE }, data: { serialNo } });
+      if (count === 0) return false;
+      await tx.recdUnitSerialHistory.create({ data: { unitId: id, previousSerialNo: expectedSerialNo, newSerialNo: serialNo, reason, actorId: req.auth!.userId } });
+      return true;
+    });
+    if (!changed) return res.status(409).json({ error: STALE_SERIAL });
+    res.json(await prisma.recdUnit.findUnique({ where: { id }, include: unitInclude }));
+  } catch (err) {
+    if (isSerialConflict(err)) return res.status(409).json({ error: takenSerialsMessage([serialNo]) });
     throw err;
   }
 });

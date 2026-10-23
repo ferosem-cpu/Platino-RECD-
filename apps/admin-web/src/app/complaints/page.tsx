@@ -57,6 +57,7 @@ function eventText(e: TicketEvent): string {
   if (e.type === "restored") return `Ticket restored from the archive${e.detail?.reason ? ` (${String(e.detail.reason)})` : ""}`;
   if (e.type === "archived") return `Ticket archived${e.detail?.reason ? ` (${String(e.detail.reason)})` : ""}`;
   if (e.type === "escalation_failed") return `${e.toValue === "2" ? "Management" : "Regional Manager"} escalation NOT delivered (${e.detail?.reason === "no_recipient" ? "no one to notify" : "delivery failed"}) - it will be retried`;
+  if (e.type === "notification_gap") return `Not every intended person could be notified when this was raised: ${e.detail?.reason === "site_has_no_region" ? "the site has no region, so no Regional Manager was told" : e.detail?.reason === "region_has_no_regional_manager" ? "the site's region has no Regional Manager" : "nobody could be notified"}`;
   if (e.type === "assigned") return e.toValue ? "Assigned to an engineer" : "Unassigned";
   if (e.type === "service_report_created") return "Service report started";
   if (e.type === "service_report_submitted") return "Service report sent for customer signature";

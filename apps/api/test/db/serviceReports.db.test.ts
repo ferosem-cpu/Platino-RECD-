@@ -147,7 +147,14 @@ describe("service reports against the real test database", { skip }, () => {
       if (prisma) {
         const complaintIds = [...tracked.complaintIds];
         const reports = await prisma.serviceReport.findMany({ where: { complaintId: { in: complaintIds } }, select: { id: true, signatureFileId: true, pdfFileId: true } });
-        await prisma.serviceReport.deleteMany({ where: { id: { in: reports.map((r: any) => r.id) } } });
+        // The disposable test database only: final (signed / submitted) reports cannot be deleted any more (migration 20261101090000), so the
+        // guard is switched off for this clean-up of the rows THIS run created, and switched on again straight after.
+        await prisma.$executeRawUnsafe('ALTER TABLE "ServiceReport" DISABLE TRIGGER "ServiceReport_final_no_delete"');
+        try {
+          await prisma.serviceReport.deleteMany({ where: { id: { in: reports.map((r: any) => r.id) } } });
+        } finally {
+          await prisma.$executeRawUnsafe('ALTER TABLE "ServiceReport" ENABLE TRIGGER "ServiceReport_final_no_delete"');
+        }
         await prisma.reportFile.deleteMany({ where: { id: { in: reports.flatMap((r: any) => [r.signatureFileId, r.pdfFileId]).filter(Boolean) } } });
         await prisma.complaint.deleteMany({ where: { id: { in: complaintIds } } }); // their events go with them
         await prisma.recdUnit.deleteMany({ where: { id: { in: [...tracked.unitIds] } } });
@@ -173,8 +180,8 @@ describe("service reports against the real test database", { skip }, () => {
     assert.match(idx.indexdef, /draft.*awaiting_signature/i);
     const checks = await prisma.$queryRaw`select conname from pg_constraint where conrelid = '"ServiceReport"'::regclass and contype = 'c' order by conname`;
     assert.deepEqual(checks.map((c: any) => c.conname), ["ServiceReport_final_states_check", "ServiceReport_kind_owner_check", "ServiceReport_signed_complete_check", "ServiceReport_status_check"]);
-    const trg = await prisma.$queryRaw`select tgname from pg_trigger where tgrelid = '"ServiceReport"'::regclass and not tgisinternal`;
-    assert.deepEqual(trg.map((t: any) => t.tgname), ["ServiceReport_signed_is_final"]);
+    const trg = await prisma.$queryRaw`select tgname from pg_trigger where tgrelid = '"ServiceReport"'::regclass and not tgisinternal order by tgname`;
+    assert.deepEqual(trg.map((t: any) => t.tgname), ["ServiceReport_final_no_delete", "ServiceReport_signed_is_final"]);
   });
 
   test("database rules: one unsigned report per ticket, a closed status vocabulary, and 'signed' must be complete", async () => {
@@ -278,7 +285,7 @@ describe("service reports against the real test database", { skip }, () => {
     assert.equal(row.signerName, "Asha Rao");
   });
 
-  test("a signed report survives its unit being removed (link set to null) and stays downloadable; its ticket cannot be deleted", async () => {
+  test("a signed report keeps its unit: the unit cannot be deleted (RESTRICT), the report stays signed and downloadable; its ticket cannot be deleted", async () => {
     const w = await makeCustomer("C");
     const t = await makeTicket(w, world.eng.id);
     const r = await awaiting(t, world.eng);
@@ -289,11 +296,10 @@ describe("service reports against the real test database", { skip }, () => {
     assert.equal(api.status, 409);
     assert.equal(api.body.code, "HAS_SERVICE_REPORTS");
 
-    await prisma.complaint.update({ where: { id: t.id }, data: { unitId: null } });
-    await prisma.recdUnit.delete({ where: { id: w.unit.id } });
-    tracked.unitIds.delete(w.unit.id);
+    // R1 D2: a unit that tickets / reports point at can no longer be deleted (it used to be detached with SET NULL, freeing its serial).
+    await assert.rejects(prisma.recdUnit.delete({ where: { id: w.unit.id } }), (e: any) => e.code === "P2003", "the database refuses to delete a unit with history");
     const row = await prisma.serviceReport.findUniqueOrThrow({ where: { id: r.id } });
-    assert.equal(row.unitId, null, "ON DELETE SET NULL - allowed even though the report is signed");
+    assert.equal(row.unitId, w.unit.id, "the report still points at its unit");
     assert.equal(row.status, "signed");
     assert.equal(row.customerId, w.customer.id);
     assert.equal((await call(w.contact, "GET", `/service-reports/${r.id}/pdf`)).status, 200, "and the PDF still downloads");
@@ -352,11 +358,18 @@ describe("service reports against the real test database", { skip }, () => {
     assert.equal((await sign(world.A.contact, r)).status, 200);
     const row = await prisma.serviceReport.findUniqueOrThrow({ where: { id: r.id } });
     const file = await prisma.reportFile.findUniqueOrThrow({ where: { id: row.pdfFileId } });
-    await prisma.reportFile.update({ where: { id: file.id }, data: { data: Buffer.concat([Buffer.from(file.data), Buffer.from("x")]) } });
-    const bad = await call(world.A.contact, "GET", `/service-reports/${r.id}/pdf`);
-    assert.equal(bad.status, 500);
-    assert.equal(bad.body.code, "FILE_INTEGRITY");
-    await prisma.reportFile.update({ where: { id: file.id }, data: { data: file.data } });
+    // The database now refuses to change a stored report file (migration 20261101090000), so the damage is simulated the way real corruption
+    // would arrive - outside the application - by switching that guard off for these two statements only (disposable test database).
+    await prisma.$executeRawUnsafe('ALTER TABLE "ReportFile" DISABLE TRIGGER "ReportFile_referenced_is_final"');
+    try {
+      await prisma.reportFile.update({ where: { id: file.id }, data: { data: Buffer.concat([Buffer.from(file.data), Buffer.from("x")]) } });
+      const bad = await call(world.A.contact, "GET", `/service-reports/${r.id}/pdf`);
+      assert.equal(bad.status, 500);
+      assert.equal(bad.body.code, "FILE_INTEGRITY");
+      await prisma.reportFile.update({ where: { id: file.id }, data: { data: file.data } });
+    } finally {
+      await prisma.$executeRawUnsafe('ALTER TABLE "ReportFile" ENABLE TRIGGER "ReportFile_referenced_is_final"');
+    }
     assert.equal((await call(world.A.contact, "GET", `/service-reports/${r.id}/pdf`)).status, 200, "restored bytes pass the check again");
     // The foreign key stops anyone deleting a file a report still points at.
     await assert.rejects(prisma.reportFile.delete({ where: { id: file.id } }), (e: any) => e.code === "P2003");

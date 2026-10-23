@@ -54,7 +54,7 @@ test("escalation is due only for an unacknowledged, delivered reminder, after th
   assert.equal(escalationDue(r, 24, at(23)), false);
   assert.equal(escalationDue(r, 24, at(24)), true);
   assert.equal(escalationDue({ ...r, acknowledgedAt: at(1) }, 24, at(500)), false, "acknowledged");
-  for (const status of ["pending", "sending", "failed", "no_recipient", "acknowledged", "closed"]) assert.equal(escalationDue({ ...r, status }, 24, at(500)), false, status);
+  for (const status of ["pending", "sending", "acknowledged", "closed"]) assert.equal(escalationDue({ ...r, status }, 24, at(500)), false, status); // failed / no_recipient: see the undelivered test below
   assert.equal(escalationDue({ ...r, sentAt: null }, 24, at(500)), false);
   const l1 = { ...r, escalationLevel: 1, lastEscalatedAt: at(30) };
   assert.equal(escalationDue(l1, 24, at(53)), false, "the next level is measured from the last escalation");
@@ -101,4 +101,28 @@ test("the proposed lead time: eligible from 3 calendar days before the due date,
   assert.equal(reminderEligible(due, at("2026-10-18T23:59:00.000Z"), 3), false, "4 days and a minute before: too early");
   assert.equal(reminderEligible(due, at("2026-10-25T00:00:00.000Z"), 3), true, "overdue activities are always eligible");
   assert.equal(reminderEligible(due, at("2026-10-19T00:00:00.000Z"), null), false, "policy off: never");
+});
+
+test("escalationDue: an undelivered (failed / no recipient) reminder escalates after the same hours, counted from creation; a delivered one still counts from delivery", () => {
+  const H = 3600 * 1000;
+  const t0 = new Date("2026-01-01T00:00:00Z");
+  const at = (h: number) => new Date(t0.getTime() + h * H);
+  const base = { acknowledgedAt: null, escalationLevel: 0, lastEscalatedAt: null, createdAt: t0 };
+  for (const status of ["failed", "no_recipient"]) {
+    const r = { ...base, status, sentAt: null };
+    assert.equal(escalationDue(r, 24, at(23)), false, `${status}: too early`);
+    assert.equal(escalationDue(r, 24, at(24)), true, `${status}: due, although never delivered`);
+    assert.equal(escalationDue({ ...r, escalationLevel: 1, lastEscalatedAt: at(30) }, 24, at(53)), false, `${status}: level 2 counts from level 1`);
+    assert.equal(escalationDue({ ...r, escalationLevel: 1, lastEscalatedAt: at(30) }, 24, at(54)), true);
+    assert.equal(escalationDue({ ...r, escalationLevel: 2 }, 24, at(500)), false, "two levels at most");
+    assert.equal(escalationDue({ ...r, acknowledgedAt: at(1) }, 24, at(500)), false, "acknowledged");
+    assert.equal(escalationDue(r, null, at(500)), false, "policy off");
+    assert.equal(escalationDue({ ...r, createdAt: null }, 24, at(500)), false, "no clock to count from");
+  }
+  const sent = { ...base, status: "sent", sentAt: at(10) };
+  assert.equal(escalationDue(sent, 24, at(33)), false, "24 h run from the delivery, not from creation");
+  assert.equal(escalationDue(sent, 24, at(34)), true);
+  assert.equal(escalationDue({ ...sent, sentAt: null }, 24, at(500)), false, "a 'sent' reminder without a delivery time is not escalated");
+  for (const status of ["pending", "sending", "acknowledged", "closed"]) assert.equal(escalationDue({ ...base, status, sentAt: null }, 24, at(500)), false, status);
+  assert.equal(escalationDue({ ...base, status: "sent", sentAt: at(40), escalationAttempts: 1 }, 24, at(41)), true, "a level that was already attempted stays due until delivered");
 });

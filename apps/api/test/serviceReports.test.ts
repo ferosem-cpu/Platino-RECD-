@@ -698,7 +698,10 @@ test("read: customers see reports that have left draft; staff see all; other cus
   assert.equal((await call("custB", "GET", "/service-reports?complaintId=t1")).status, 404, "another customer's ticket");
   assert.equal((await call("custB", "GET", `/service-reports/${draft.body.id}`)).status, 404);
   assert.equal((await call("sales", "GET", "/service-reports?complaintId=t1")).status, 403);
-  assert.equal((await call("mgmt", "GET", "/service-reports")).status, 400);
+  // No ticket / AMC order named: a customer must name one of their own (400); a role with no report rights gets nothing (403, decided before any
+  // query). The staff list itself (scope, filters, paging) is exercised against the real database in test/db/serviceReportsStaffAndFinal.db.test.ts.
+  assert.equal((await call("custA", "GET", "/service-reports")).status, 400);
+  assert.equal((await call("sales", "GET", "/service-reports")).status, 403);
   const staffDetail = await call("mgmt", "GET", `/service-reports/${draft.body.id}`);
   assert.deepEqual(staffDetail.body.permissions, { canEdit: false, canSubmit: false, canReopen: true, canSign: false });
 });

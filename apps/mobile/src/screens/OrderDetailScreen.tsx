@@ -2,6 +2,9 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, Pressable, StyleSheet, Image, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "@/lib/apiClient";
+import UnitSerials from "@/components/UnitSerials";
+import SiteContacts from "@/components/SiteContacts";
+import type { UnitForDisplay } from "@recd/shared";
 
 interface SiteDetail {
   id: string;
@@ -16,6 +19,10 @@ interface SiteDetail {
   }>;
   photos: Array<{ id: string; photoUrl: string; checkpoint: { label: string } }>;
   pendingActions: Array<{ id: string; description: string; status: string; category: string }>;
+  units?: UnitForDisplay[];
+  sitePocName?: string | null;
+  sitePocNumber?: string | null;
+  contacts?: Array<{ id: string; name: string; role: string | null; phone: string | null }>;
 }
 
 export default function OrderDetailScreen({ route, navigation }: { route: any; navigation: any }) {
@@ -48,6 +55,12 @@ export default function OrderDetailScreen({ route, navigation }: { route: any; n
     <ScrollView style={styles.container}>
       <Text style={styles.title}>{site.order.orderNumber}</Text>
       <Text style={styles.subtitle}>Current stage: {site.currentStage.label}</Text>
+
+      <Text style={styles.section}>RECD serial number</Text>
+      <UnitSerials units={site.units} />
+
+      <Text style={styles.section}>Site contacts</Text>
+      <SiteContacts site={site} />
 
       {openActions.map((action) => (
         <View key={action.id} style={styles.pendingCard}>

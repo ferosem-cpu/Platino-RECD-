@@ -18,7 +18,7 @@ import { COMPLAINT_EVENT, SLA_PAUSED_STATUSES } from "@recd/shared";
 import { prisma } from "./prisma";
 import { slaFromSettings, targetEscalationLevel } from "./sla";
 import { logComplaintEvent, logComplaintEventStrict } from "./ticketEvents";
-import { ticketRecipients } from "./ticketNotify";
+import { regionalManagerGap, ticketRecipients } from "./ticketNotify";
 import { send as sendNotification } from "../services/notifications/notificationService";
 
 export const ESCALATION_MAX_ATTEMPTS = 5;
@@ -68,6 +68,8 @@ export async function runTicketEscalation(now: Date = new Date()): Promise<Escal
   const repeatStale = new Date(now.getTime() - DAY_MS);
 
   for (const c of candidates) {
+   // One ticket failing (a database or provider error) must never stop the escalation of the unrelated tickets after it; it is retried next run.
+   try {
     const target = targetEscalationLevel(c, sla, now);
     if (target <= c.slaEscalationLevel) continue;
     const ageHours = Math.floor((now.getTime() - c.createdAt.getTime()) / 3_600_000);
@@ -76,6 +78,8 @@ export async function runTicketEscalation(now: Date = new Date()): Promise<Escal
     // A level jump (the job was down) still tells every audience it skipped, one level at a time.
     for (let lvl = c.slaEscalationLevel + 1; lvl <= target; lvl++) {
       const recipients = await ticketRecipients(audienceOf(lvl), { regionId: c.site?.regionId });
+      // Level 1 goes to the region's Regional Managers; with no region / no manager it falls back to the Service Managers (approved) - say so in the history.
+      const fallback = lvl === 1 ? await regionalManagerGap(c.site?.regionId) : null;
       if (recipients.length === 0) {
         await recordDeferred(c.id, lvl, "no_recipient", 0);
         summary.deferred++;
@@ -135,7 +139,7 @@ export async function runTicketEscalation(now: Date = new Date()): Promise<Escal
           fromValue: String(lvl - 1),
           toValue: String(lvl),
           actorLabel: "System (SLA)",
-          detail: { audience: audienceOf(lvl), ageHours, recipients: recipients.length },
+          detail: { audience: audienceOf(lvl), ageHours, recipients: recipients.length, ...(fallback ? { fallback: "service_managers", reason: fallback } : {}) },
         });
         return true;
       });
@@ -143,6 +147,10 @@ export async function runTicketEscalation(now: Date = new Date()): Promise<Escal
       if (lvl === 1) summary.escalatedToRegional++;
       else summary.escalatedToManagement++;
     }
+   } catch (err) {
+    console.error(`Escalation of ticket ${c.ticketNumber} failed`, err);
+    summary.deferred++;
+   }
   }
   return summary;
 }

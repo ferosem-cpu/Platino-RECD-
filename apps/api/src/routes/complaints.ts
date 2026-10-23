@@ -26,9 +26,10 @@ import { send as sendNotification } from "../services/notifications/notification
 import { asOptionalString, asString } from "../lib/params";
 import { managedRegionIds } from "../lib/regions";
 import { logComplaintEventStrict } from "../lib/ticketEvents";
-import { notifyMany, ticketRecipients } from "../lib/ticketNotify";
+import { notifyTicketRaised } from "../lib/ticketNotify";
 import { ticketAccessError } from "../lib/ticketAccess";
 import { CUSTOMER_REF_SELECT, SITE_ORDER_SELECT } from "../lib/safeSelect";
+import { CUSTOMER_TICKET_SITE_SELECT, customerTicketView } from "../lib/ticketViews";
 import { TicketError, archiveTicket, restoreTicket, listAssignees, updateTicket } from "../lib/ticketAdmin";
 
 /** How many times a freshly generated ticket number is tried before giving up (matches the public flow). */
@@ -142,6 +143,17 @@ complaintsRouter.get(
     // Contact numbers are loaded - through each ticket's OWN site and customer, never through an id the
     // client sends - only for roles that need them to do the job (see lib/ticketContacts.ts).
     const audience = contactAudience(req.auth!);
+    // A customer gets a whitelisted view of their own tickets (lib/ticketViews.ts) - never the staff columns - and the query does not even load staff relations for them.
+    if (customerId) {
+      const own = await prisma.complaint.findMany({
+        where: scoped,
+        include: { site: { select: CUSTOMER_TICKET_SITE_SELECT }, unit: { select: { id: true, serialNo: true } } },
+        orderBy: { createdAt: "desc" },
+        take,
+        skip,
+      });
+      return res.json(own.map(customerTicketView));
+    }
     const complaints = await prisma.complaint.findMany({
       where: scoped,
       include: {
@@ -300,15 +312,10 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
     });
   }
 
-  // Service desk, Service Managers, Management and the site region's Regional Managers.
-  try {
-    const recipients = await ticketRecipients("raised", { regionId: targetSite.regionId });
-    await notifyMany(recipients, "complaint_raised", { ticketNumber });
-  } catch (err) {
-    console.error("Complaint notification failed", err);
-  }
+  // Service desk, Service Managers, Management and the site region's Regional Managers; a missing Regional Manager / region is recorded in the history.
+  await notifyTicketRaised({ complaintId: complaint.id, regionId: targetSite.regionId, data: { ticketNumber } });
 
-  res.status(201).json(complaint);
+  res.status(201).json(customerTicketView(complaint));
 });
 
 complaintsRouter.patch(
@@ -326,7 +333,8 @@ complaintsRouter.patch(
       return sendTicketError(res, err);
     }
 
-    const complaint = await prisma.complaint.findUnique({ where: { id }, include: { customer: { include: { contacts: true } } } });
+    // No customer / contact data in the answer: the staff screens reload the list, and engineers must not get contact numbers they are not meant to see.
+    const complaint = await prisma.complaint.findUnique({ where: { id } });
     if (!complaint) return res.status(404).json({ error: "Complaint not found" });
 
     // Notifications go out AFTER the commit and only for a change that really happened (a no-op update notifies nobody).

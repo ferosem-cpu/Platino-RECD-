@@ -32,7 +32,13 @@ export async function send({ recipientId, templateKey, data, channels }: SendArg
   const results = await Promise.all(
     targetChannels.map(async (channel) => {
       const provider = providersByChannel[channel];
-      const delivered = await provider.send({ recipientId, templateKey, data });
+      // A provider that throws is a failed delivery: it is logged as failed (never as sent) and cannot stop the other channels' records.
+      let delivered = false;
+      try {
+        delivered = await provider.send({ recipientId, templateKey, data });
+      } catch (err) {
+        console.error(`[notify] ${channel} provider threw for ${templateKey}`, err);
+      }
       const isLive = LIVE_NOTIFICATION_CHANNELS.includes(channel);
       return prisma.notificationLog.create({
         data: {

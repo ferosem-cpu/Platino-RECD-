@@ -234,7 +234,10 @@ test("a customer gets no contact information and never sees a reseller's number 
   assert.ok(!r.raw.includes("9000000004"), "the reporter's number is not in the response at all");
   assert.equal(r.body[0].reporterName, "Mani", "the reporter's name and type are still shown, as before");
   assert.equal(called("user.findMany").length, 0);
-  assert.equal(called("complaint.findMany")[0][0].include.site.include.contacts, undefined, "site contacts are not even loaded for customers");
+  // R11.A: a customer's ticket query asks only for the whitelisted customer view - no site contacts, no assignee, no internal fields.
+  const custInclude = called("complaint.findMany")[0][0].include;
+  assert.equal(custInclude.site.include, undefined, "customers get a plain site select, not the staff include with contacts");
+  assert.equal(custInclude.assignedTo, undefined, "the assignee relation is never loaded for a customer's query");
 });
 
 test("roles without complaint access still cannot list tickets (or their contacts)", async () => {

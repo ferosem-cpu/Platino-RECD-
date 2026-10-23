@@ -3,11 +3,14 @@ import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl } from "rea
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/context/AuthContext";
+import { unitSerialsSummary } from "@recd/shared";
 
 interface OrderRow {
   id: string;
   orderNumber: string;
   product: { name: string };
+  /** Serial of each RECD unit of the order (null on a legacy unit that has none yet). */
+  units?: Array<{ id: string; serialNo: string | null }>;
   site: { id: string; currentStage: { label: string } } | null;
 }
 
@@ -46,6 +49,7 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
           >
             <Text style={styles.cardTitle}>{item.orderNumber}</Text>
             <Text style={styles.cardSubtitle}>{item.product.name}</Text>
+            <Text style={styles.cardSerial} testID={`serials-${item.id}`}>S/N: {unitSerialsSummary(item.units)}</Text>
             <Text style={styles.cardStage}>{item.site?.currentStage.label ?? "Not yet scheduled"}</Text>
           </Pressable>
         )}
@@ -63,6 +67,7 @@ const styles = StyleSheet.create({
   card: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 14, marginBottom: 10 },
   cardTitle: { fontWeight: "600", fontSize: 15 },
   cardSubtitle: { color: "#666", marginTop: 2 },
+  cardSerial: { color: "#374151", marginTop: 2, fontSize: 12 },
   cardStage: { color: "#2563eb", marginTop: 6, fontSize: 13 },
   logout: { textAlign: "center", color: "#dc2626", padding: 12 },
 });

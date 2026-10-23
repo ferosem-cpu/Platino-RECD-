@@ -417,6 +417,44 @@ describe("user administration against the real test database", { skip }, () => {
     assert.deepEqual(log.filter((x: any) => x.action === "association_changed").length, 2);
   });
 
+  test("R10: an internal erection engineer (no vendor) can have their profile edited; the vendor rule still holds everywhere else", async () => {
+    const t = await tokenOf(w.mgmt);
+    const internal = await makeUser("internal", "erection_engineer"); // existing data: no vendor
+    const v0 = await tv(internal.id);
+    const edit = await call(t, "PUT", `/users/${internal.id}`, { name: `${PREFIX} internal renamed`, title: "Site lead", phone: "9000012345" });
+    assert.equal(edit.status, 200, JSON.stringify(edit.body));
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: internal.id } });
+    assert.deepEqual([row.name, row.title, row.vendorId, row.roleId], [`${PREFIX} internal renamed`, "Site lead", null, roleIds.erection_engineer], "edited, still internal, role unchanged");
+    assert.equal(await tv(internal.id), v0, "a plain profile edit revokes no session");
+    // re-sending the unchanged role or an explicit "no vendor" is still just an edit
+    assert.equal((await call(t, "PUT", `/users/${internal.id}`, { name: `${PREFIX} internal again`, roleKey: "erection_engineer" })).status, 200);
+    assert.equal((await call(t, "PUT", `/users/${internal.id}`, { title: "Lead", vendorId: null })).status, 200);
+
+    // the vendor rule is NOT relaxed: creating one without a vendor, moving someone into the role without one, or removing a vendor all stay refused
+    const create = await call(t, "POST", "/users", { name: `${PREFIX} new eng`, email: `new-eng-${PREFIX}@example.invalid`.toLowerCase(), roleKey: "erection_engineer" });
+    assert.equal(create.status, 400, "creating an erection engineer without a vendor");
+    const sales = await makeUser("tomove", "sales");
+    assert.equal((await call(t, "PUT", `/users/${sales.id}`, { roleKey: "erection_engineer" })).status, 400, "moving into the role without a vendor");
+    const vendorLinked = await makeUser("linked", "erection_engineer", { vendorId: w.V1.id });
+    assert.equal((await call(t, "PUT", `/users/${vendorLinked.id}`, { vendorId: null })).status, 400, "a vendor-linked engineer cannot lose the vendor");
+    assert.equal((await call(t, "PUT", `/users/${vendorLinked.id}`, { name: `${PREFIX} linked renamed` })).status, 200, "and can still be renamed");
+
+    // an internal engineer can be given a vendor (approved only) - the link is recorded
+    assert.equal((await call(t, "PUT", `/users/${internal.id}`, { vendorId: w.pendingVendor.id })).status, 400, "unapproved vendor");
+    assert.equal((await call(t, "PUT", `/users/${internal.id}`, { vendorId: w.V1.id })).status, 200);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: internal.id } })).vendorId, w.V1.id);
+  });
+
+  test("R10: editing an internal engineer cannot be used to gain permissions - role changes and privileged accounts keep their rules", async () => {
+    const internal = await makeUser("internal2", "erection_engineer");
+    const t = await tokenOf(internal); // the engineer themself holds no user-management permission
+    assert.equal((await call(t, "PUT", `/users/${internal.id}`, { roleKey: "super_admin" })).status, 403, "no self-promotion");
+    assert.equal((await call(t, "PUT", `/users/${internal.id}`, { name: "x" })).status, 403, "and no manage_users, so no editing at all");
+    const mgmt = await tokenOf(w.mgmt);
+    assert.equal((await call(mgmt, "PUT", `/users/${internal.id}`, { roleKey: "super_admin" })).status, 403, "Management cannot grant Super Admin");
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: internal.id } })).roleId, roleIds.erection_engineer);
+  });
+
   test("a role change that keeps the same vendor-scoped role, or involves a role with a legitimate vendor link, does not erase it", async () => {
     const t = await tokenOf(w.mgmt);
     const eng = await makeUser("keep", "erection_engineer", { vendorId: w.V1.id });

@@ -426,12 +426,11 @@ describe("ticket management against the real test database", { skip }, () => {
     const created = (await events(r.body.id, "created"))[0];
     assert.deepEqual(created.detail, { source: "portal", serialNo: unit.serialNo, siteName: site.companyName, siteId: site.id, unitId: unit.id });
     assert.equal(created.actorId, w.custA.id);
-    // the snapshot survives the unit being removed from the ticket's links
+    // R1 D2: even a CLOSED ticket keeps its unit - the unit cannot be deleted (it used to be detached by SET NULL), and the snapshot stays
     await prisma.complaint.update({ where: { id: r.body.id }, data: { status: "closed", closedAt: new Date() } });
-    await prisma.recdUnit.delete({ where: { id: unit.id } });
-    tracked.unitIds.delete(unit.id);
-    assert.equal((await raw(r.body.id)).unitId, null, "the link is cleared by the existing SET NULL rule");
-    assert.equal((await events(r.body.id, "created"))[0].detail.serialNo, unit.serialNo, "but the history still says which serial was reported");
+    await assert.rejects(prisma.recdUnit.delete({ where: { id: unit.id } }), (e: any) => e.code === "P2003");
+    assert.equal((await raw(r.body.id)).unitId, unit.id, "the link is kept");
+    assert.equal((await events(r.body.id, "created"))[0].detail.serialNo, unit.serialNo, "and the history still says which serial was reported");
   });
 
   // ------------------------------------------------------------------------------------------
@@ -1221,5 +1220,86 @@ describe("ticket management against the real test database", { skip }, () => {
     assert.equal(total(rs.body), await live(w.RS.id));
     assert.equal(total(all.body), await live(), "Management sees the whole company");
     assert.ok(total(rn.body) < total(all.body));
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // R11.A - customer field exposure (real database)
+  // ------------------------------------------------------------------------------------------
+
+  test("customer field exposure: a customer's own ticket carries what they reported, never internal remarks / root cause / SLA level / assignee, and one customer cannot read another's ticket", async () => {
+    const { t: tA } = await makeTicket({ rootCause: "Secret internal root cause", remarks: "Staff-only remark", resolutionNotes: "Internal resolution detail", serviceReportUrl: "data:staff-report", slaEscalationLevel: 1, assignedToId: w.eng.id }, { customerId: w.CA.id });
+    const { t: tB } = await makeTicket({}, { customerId: w.CB.id });
+
+    const mine = await call(await tok(w.custA), "GET", "/complaints");
+    assert.equal(mine.status, 200);
+    const seen = mine.body.find((x: any) => x.id === tA.id);
+    assert.ok(seen, "the customer sees their own ticket");
+    assert.equal(seen.ticketNumber, tA.ticketNumber);
+    assert.equal(seen.status, tA.status);
+    for (const forbidden of ["rootCause", "remarks", "resolutionNotes", "serviceReportUrl", "slaEscalationLevel", "assignedToId", "assignedTo"]) {
+      assert.equal(forbidden in seen, false, `customer response must not carry "${forbidden}"`);
+    }
+    const text = JSON.stringify(mine.body);
+    for (const secret of ["Secret internal root cause", "Staff-only remark", "Internal resolution detail", "data:staff-report"]) {
+      assert.ok(!text.includes(secret), `customer response leaked "${secret}"`);
+    }
+    // Changing the request's own customer scope cannot be bypassed: custA never sees custB's ticket, whatever is asked for.
+    assert.ok(!mine.body.some((x: any) => x.id === tB.id), "another customer's ticket is never returned");
+    const viaQuery = await call(await tok(w.custA), "GET", `/complaints?search=${tB.ticketNumber}`);
+    assert.ok(!viaQuery.body.some((x: any) => x.id === tB.id), "a search parameter cannot widen a customer's own scope");
+
+    // Staff keep the full row - nothing was removed from their own view.
+    const staffView = await call(await tok(w.svc), "GET", "/complaints");
+    const staffSeen = staffView.body.find((x: any) => x.id === tA.id);
+    assert.equal(staffSeen.rootCause, "Secret internal root cause");
+    assert.equal(staffSeen.assignedTo?.id, w.eng.id);
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // R11.D - a site with no region
+  // ------------------------------------------------------------------------------------------
+
+  test("a ticket on a site with no region: no Regional Manager recipient is invented, Service Team / Management are still told, and the gap is recorded in the ticket's history", async () => {
+    const { site, unit } = await makeSite(w.CA.id, null, null);
+    const create = await call(await tok(w.custA), "POST", "/complaints", {
+      siteId: site.id,
+      unitId: unit.id,
+      category: "non_performance",
+      description: `${PREFIX} unregioned site ticket`,
+      severity: "medium",
+      attachmentUrl: "data:image/png;base64,aaa",
+    });
+    assert.equal(create.status, 201);
+    tracked.complaintIds.add(create.body.id);
+
+    // Service Team / Management still got it (the existing audience, unaffected by the missing region).
+    assert.ok(mailsFor(create.body, "complaint_raised").some((m) => m.recipientId === w.svc.id));
+    assert.ok(mailsFor(create.body, "complaint_raised").some((m) => m.recipientId === w.mgmt.id));
+    // No Regional Manager of EITHER region was notified - nobody was guessed.
+    assert.equal(mailsFor(create.body, "complaint_raised").filter((m) => m.recipientId === w.rmN.id || m.recipientId === w.rmS.id).length, 0);
+
+    const rows = await events(create.body.id, "notification_gap");
+    assert.equal(rows.length, 1, "the gap is recorded once");
+    assert.equal((rows[0].detail as any).reason, "site_has_no_region");
+  });
+
+  test("a ticket on a site with a region that has no mapped Regional Manager: the gap names that reason, and the SLA escalation falls back to Service Managers instead of inventing a Regional Manager", async () => {
+    const orphanRegion = await prisma.region.create({ data: { key: `${PREFIX.toLowerCase()}-orphan`, name: `${PREFIX} Orphan` } });
+    tracked.regionIds.add(orphanRegion.id);
+    const { site, unit } = await makeSite(w.CA.id, orphanRegion.id, null);
+    const create = await call(await tok(w.custA), "POST", "/complaints", {
+      siteId: site.id,
+      unitId: unit.id,
+      category: "non_performance",
+      description: `${PREFIX} orphan region ticket`,
+      severity: "medium",
+      attachmentUrl: "data:image/png;base64,aaa",
+    });
+    assert.equal(create.status, 201);
+    tracked.complaintIds.add(create.body.id);
+
+    const rows = await events(create.body.id, "notification_gap");
+    assert.equal(rows.length, 1);
+    assert.equal((rows[0].detail as any).reason, "region_has_no_regional_manager");
   });
 });

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { randomUUID } from "crypto";
+import { randomInt, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import {
   publicOtpRequestSchema,
@@ -15,7 +15,7 @@ import {
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { logComplaintEventStrict } from "../lib/ticketEvents";
-import { notifyMany, ticketRecipients } from "../lib/ticketNotify";
+import { notifyTicketRaised } from "../lib/ticketNotify";
 import { rateLimit } from "../middleware/rateLimit";
 import {
   checkOtpAttemptable,
@@ -24,8 +24,13 @@ import {
   generateSessionToken,
   hashOtpCode,
   hashSessionToken,
+  publicOtpLockKeys,
+  PUBLIC_OTP_DELIVERY,
+  PUBLIC_OTP_RETENTION_MS,
+  PUBLIC_OTP_USABLE_DELIVERY,
   verifyOtpCode,
 } from "../lib/publicOtp";
+import { lockKeys } from "../lib/advisoryLock";
 import { devEchoAllowed, getOtpDelivery } from "../lib/otpDelivery";
 
 /**
@@ -48,6 +53,16 @@ function isUniqueViolation(err: unknown): err is Prisma.PrismaClientKnownRequest
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
 }
 
+/** Retention: about one request in fifty deletes the rows that are past every limit window and session. Best effort - never affects the answer. */
+function purgeOldPublicOtps(): void {
+  if (randomInt(0, 50) !== 0) return;
+  try {
+    void Promise.resolve(prisma.publicOtp.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - PUBLIC_OTP_RETENTION_MS) } } })).catch(() => undefined);
+  } catch {
+    /* best effort */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 1. Request an OTP
 // ---------------------------------------------------------------------------
@@ -66,57 +81,77 @@ publicComplaintsRouter.post("/otp/request", async (req, res) => {
   // req.ip honours X-Forwarded-For only for the proxies named by TRUST_PROXY, so a client cannot choose the address its requests are counted under.
   const ip = req.ip || null;
 
-  const since = new Date(Date.now() - HOUR_MS);
-  const [phoneLastHour, serialLastHour, ipLastHour, lastForPhone] = await Promise.all([
-    prisma.publicOtp.count({ where: { phone, createdAt: { gte: since } } }),
-    prisma.publicOtp.count({ where: { serialNorm: serialNo, createdAt: { gte: since } } }),
-    ip ? prisma.publicOtp.count({ where: { ip, createdAt: { gte: since } } }) : Promise.resolve(0),
-    prisma.publicOtp.findFirst({ where: { phone }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
-  ]);
-  const decision = decideOtpRequest({
-    phoneLastHour,
-    serialLastHour,
-    ipLastHour,
-    secondsSinceLastForPhone: lastForPhone ? (Date.now() - lastForPhone.createdAt.getTime()) / 1000 : null,
-  });
-  if (!decision.allowed) {
-    res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+  const unit = await prisma.recdUnit.findUnique({ where: { serialNo }, select: { id: true, status: true } });
+  const known = Boolean(unit && unit.status === "active");
+  const id = randomUUID();
+  const code = generateOtpCode();
+
+  // The limits are a "count what exists, then insert" decision, so they are made while holding per-phone / per-serial / per-address
+  // database locks: parallel requests queue up and each one counts the rows its predecessors committed, so a burst cannot slip past the cap.
+  const throttled = await prisma.$transaction(
+    async (tx) => {
+      await lockKeys(tx, publicOtpLockKeys(phone, serialNo, ip));
+      const since = new Date(Date.now() - HOUR_MS);
+      const [phoneLastHour, serialLastHour, ipLastHour, lastForPhone] = await Promise.all([
+        tx.publicOtp.count({ where: { phone, createdAt: { gte: since } } }),
+        tx.publicOtp.count({ where: { serialNorm: serialNo, createdAt: { gte: since } } }),
+        ip ? tx.publicOtp.count({ where: { ip, createdAt: { gte: since } } }) : Promise.resolve(0),
+        tx.publicOtp.findFirst({ where: { phone }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+      ]);
+      const decision = decideOtpRequest({
+        phoneLastHour,
+        serialLastHour,
+        ipLastHour,
+        secondsSinceLastForPhone: lastForPhone ? (Date.now() - lastForPhone.createdAt.getTime()) / 1000 : null,
+      });
+      if (!decision.allowed) return decision;
+      await tx.publicOtp.create({
+        data: {
+          id,
+          phone,
+          serialNorm: serialNo,
+          unitId: known ? unit!.id : null,
+          codeHash: hashOtpCode(id, phone, code),
+          expiresAt: new Date(Date.now() + PUBLIC_OTP.EXPIRY_SECONDS * 1000),
+          deliveryChannel: known ? delivery.name : "none",
+          // Not a usable code until the provider accepts it (an unknown serial is never sent anything).
+          deliveryStatus: known ? PUBLIC_OTP_DELIVERY.PENDING : PUBLIC_OTP_DELIVERY.SKIPPED,
+          ip,
+        },
+      });
+      return null;
+    },
+    { timeout: 15_000 },
+  );
+  if (throttled && !throttled.allowed) {
+    res.setHeader("Retry-After", String(throttled.retryAfterSeconds));
     return res.status(429).json({
       error:
-        decision.reason === "cooldown"
-          ? `Please wait ${decision.retryAfterSeconds}s before requesting another code.`
+        throttled.reason === "cooldown"
+          ? `Please wait ${throttled.retryAfterSeconds}s before requesting another code.`
           : "Too many code requests. Please try again later.",
-      retryAfterSeconds: decision.retryAfterSeconds,
+      retryAfterSeconds: throttled.retryAfterSeconds,
     });
   }
 
-  const unit = await prisma.recdUnit.findUnique({ where: { serialNo }, select: { id: true, status: true } });
-  const known = Boolean(unit && unit.status === "active");
-
-  const id = randomUUID();
-  const code = generateOtpCode();
-  await prisma.publicOtp.create({
-    data: {
-      id,
-      phone,
-      serialNorm: serialNo,
-      unitId: known ? unit!.id : null,
-      codeHash: hashOtpCode(id, phone, code),
-      expiresAt: new Date(Date.now() + PUBLIC_OTP.EXPIRY_SECONDS * 1000),
-      deliveryChannel: known ? delivery.name : "none",
-      deliveryStatus: "skipped",
-      ip,
-    },
-  });
-
   let devCode: string | undefined;
   if (known) {
-    const result = await delivery.send(phone, code);
+    let result: { ok: boolean; error?: string };
+    try {
+      result = await delivery.send(phone, code);
+    } catch {
+      result = { ok: false, error: "provider_threw" };
+    }
     // "skipped" for the local-development echo channel: nothing was actually sent to a phone.
-    await prisma.publicOtp.update({ where: { id }, data: { deliveryStatus: !result.ok ? "failed" : delivery.name === "dev" ? "skipped" : "sent" } });
+    const status = !result.ok ? PUBLIC_OTP_DELIVERY.FAILED : delivery.name === "dev" ? PUBLIC_OTP_DELIVERY.SKIPPED : PUBLIC_OTP_DELIVERY.SENT;
+    // A failed delivery also expires the row at once: nobody received that code, and it must never be accepted.
+    await prisma.publicOtp.update({ where: { id }, data: { deliveryStatus: status, ...(result.ok ? {} : { expiresAt: new Date() }) } });
     if (!result.ok) console.error(`[otp] delivery failed for OTP ${id} via ${delivery.name}: ${result.error}`);
     if (result.ok && delivery.name === "dev" && devEchoAllowed()) devCode = code;
   }
+
+  // Housekeeping: drop rows nobody can use or count any more (phone numbers and addresses are not kept longer than needed).
+  purgeOldPublicOtps();
 
   // Identical response whether or not the serial exists (or delivery succeeded).
   res.json({
@@ -137,7 +172,8 @@ publicComplaintsRouter.post("/otp/verify", async (req, res) => {
   const { serialNo, phone, code } = parsed.data;
 
   const row = await prisma.publicOtp.findFirst({
-    where: { phone, serialNorm: serialNo, unitId: { not: null } },
+    // Only a code that was actually delivered can be the one in play: a failed or never-sent request must not hide an earlier delivered code.
+    where: { phone, serialNorm: serialNo, unitId: { not: null }, deliveryStatus: { in: PUBLIC_OTP_USABLE_DELIVERY } },
     orderBy: { createdAt: "desc" },
   });
   if (!row || checkOtpAttemptable(row) !== "ok") return res.status(400).json({ error: GENERIC_BAD_OTP });
@@ -285,10 +321,11 @@ publicComplaintsRouter.post("/", async (req, res) => {
   }
   if (!complaint) return res.status(500).json({ error: "Could not create the ticket. Please try again." });
 
-  // Service desk, Service Managers, Management and the site region's Regional Managers.
-  try {
-    const recipients = await ticketRecipients("raised", { regionId: unit.site?.regionId });
-    await notifyMany(recipients, "complaint_raised", {
+  // Service desk, Service Managers, Management and the site region's Regional Managers; a missing Regional Manager / region is recorded in the history.
+  await notifyTicketRaised({
+    complaintId: complaint.id,
+    regionId: unit.site?.regionId,
+    data: {
       ticketNumber: complaint.ticketNumber,
       serialNo: unit.serialNo,
       source: COMPLAINT_SOURCE.PUBLIC,
@@ -296,10 +333,8 @@ publicComplaintsRouter.post("/", async (req, res) => {
       reporterType: d.reporterType,
       reporterPhone: otp.phone,
       issue: ISSUE_CATEGORY_LABELS[d.issueCategory],
-    });
-  } catch (err) {
-    console.error("Public complaint notification failed", err);
-  }
+    },
+  });
 
   res.status(201).json({ ticketNumber: complaint.ticketNumber });
 });

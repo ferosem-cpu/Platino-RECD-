@@ -11,7 +11,9 @@
  *  2. Nobody changes their own role or their own customer / vendor link, deactivates themselves or resets their own password through the
  *     administration routes (they use "change password").
  *  3. The last active Super Admin can never be demoted or deactivated.
- *  4. customer accounts belong to exactly one customer and are never vendor-scoped; erection engineers must belong to an approved vendor;
+ *  4. customer accounts belong to exactly one customer and are never vendor-scoped; erection engineers must belong to an approved vendor
+ *     WHEN the account is created, moved into the role, or has its vendor changed - an EXISTING erection engineer with no vendor (an internal /
+ *     legacy account) can still have its profile (name, e-mail, phone, title) edited without being forced onto a vendor;
  *     every other staff role is never customer-scoped and keeps a vendor link only if it already had one for a reason other than being an
  *     erection engineer (REVIEW: no other role is documented as vendor-scoped).
  */
@@ -102,7 +104,10 @@ export function planAssociations(i: AssociationPlanInput): AssociationPlan {
     customerId = null;
     const leavingVendorRole = i.fromRole !== null && VENDOR_REQUIRED_ROLES.includes(i.fromRole) && !needsVendor;
     if (leavingVendorRole && i.requested.vendorId === undefined) vendorId = null;
-    if (needsVendor && !vendorId) return { ok: false, error: "An erection engineer must be assigned to a vendor" };
+    // An existing internal erection engineer (same role, no vendor, nothing asking to set or clear one) keeps working: a profile edit is not
+    // a reason to refuse. Creating one, moving someone into the role, or clearing/setting a vendor still follows the vendor rule.
+    const unchangedInternalEngineer = needsVendor && i.fromRole === i.toRole && !i.current.vendorId && !i.requested.vendorId;
+    if (needsVendor && !vendorId && !unchangedInternalEngineer) return { ok: false, error: "An erection engineer must be assigned to a vendor" };
   }
   return {
     ok: true,

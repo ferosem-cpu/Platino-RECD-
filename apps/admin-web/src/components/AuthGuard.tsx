@@ -8,6 +8,7 @@ import BottomNav from "./BottomNav";
 import AgentChatBubble from "./AgentChatBubble";
 import AmcExpiryNotice from "./AmcExpiryNotice";
 import WarrantyExpiryNotice from "./WarrantyExpiryNotice";
+import { isCustomerReportPath, SERVICE_REPORT_LIST_PERMISSIONS } from "@/lib/routeAccess";
 
 /** Standalone pages that need no sign-in (no sidebar, no auth redirects). */
 const PUBLIC_PATHS = ["/vendor/register", "/report-issue"];
@@ -29,15 +30,12 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/recd-units": ["view_site_status"],
   "/regions": ["manage_regions"],
   "/reminders": ["view_complaints_overview", "manage_complaints"],
+  // Staff service-report list; the API decides which reports each user may see.
+  "/service-reports": [...SERVICE_REPORT_LIST_PERMISSIONS],
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
 const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/customers", "/products", "/reports", "/vendors", "/users", "/amc-orders", "/settings"];
-
-/** The one page besides the portal a customer may open: a single service report to review and sign (the API checks ownership). */
-function isCustomerReportPath(pathname: string): boolean {
-  return /^\/service-reports\/[^/]+$/.test(pathname);
-}
 
 function canAccess(permissions: string[], route: string): boolean {
   const required = ROUTE_PERMISSIONS[route];

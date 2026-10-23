@@ -3,6 +3,9 @@ import { View, Text, ScrollView, Pressable, TextInput, StyleSheet, Alert } from 
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import { api } from "@/lib/apiClient";
+import UnitSerials from "@/components/UnitSerials";
+import SiteContacts from "@/components/SiteContacts";
+import type { UnitForDisplay } from "@recd/shared";
 
 interface StageOption {
   id: string;
@@ -32,6 +35,10 @@ interface SiteDetail {
   confirmedExhaustHookupType: string | null;
   stageEvents: StageEvent[];
   photos: Array<{ id: string; checkpoint: { id: string; label: string }; photoUrl: string }>;
+  units?: UnitForDisplay[];
+  sitePocName?: string | null;
+  sitePocNumber?: string | null;
+  contacts?: Array<{ id: string; name: string; role: string | null; phone: string | null }>;
 }
 
 export default function SiteDetailScreen({ route }: { route: any }) {
@@ -119,6 +126,12 @@ export default function SiteDetailScreen({ route }: { route: any }) {
         Exhaust hookup - planned: {site.order.plannedExhaustHookupType ?? "-"}, confirmed:{" "}
         {site.confirmedExhaustHookupType ?? "not confirmed yet"}
       </Text>
+
+      <Text style={styles.section}>RECD serial number</Text>
+      <UnitSerials units={site.units} />
+
+      <Text style={styles.section}>Site contacts</Text>
+      <SiteContacts site={site} />
 
       <Text style={styles.section}>Update stage</Text>
       <View style={styles.chipRow}>

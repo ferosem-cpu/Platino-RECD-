@@ -31,6 +31,7 @@ import { devEchoAllowed, getOtpDelivery, isHostedOrProduction } from "../src/lib
 import { loggablePayload } from "../src/services/notifications/notificationService";
 import { createFakeOtpStore } from "./helpers/fakeOtpStore";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
+import { installFakeTransactions } from "./helpers/fakeTransactions";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -94,6 +95,7 @@ before(async () => {
   }) as typeof fetch;
 
   const { prisma } = await import("../src/lib/prisma");
+  installFakeTransactions(prisma); // OTP limits are decided under advisory locks inside a transaction
   createFakeRateLimitStore().install(prisma); // the IP limiter keeps its counters in the database; here they live in memory
   const { authRouter } = await import("../src/routes/auth");
   for (const model of ["user", "order", "otpCode", "notificationLog", "recdUnit"]) {
@@ -488,15 +490,15 @@ test("resend: the old code stops working, the newest works before expiry, and ea
   assert.equal((await customerVerify(second)).status, 401, "and only once");
 });
 
-test("resend: blocked during the 30-second cooldown - with a clear answer - and the blocked request replaces nothing", async () => {
+test("resend: blocked during the 30-second cooldown - answered like any other request (no account oracle) - and the blocked request replaces nothing", async () => {
   reset();
-  await customerRequest();
+  const accepted = await customerRequest();
   const first = sentCode();
   const blocked = await customerRequest();
-  assert.equal(blocked.status, 429);
-  assert.match(blocked.body.error, /wait \d+s/);
-  assert.ok(blocked.body.retryAfterSeconds >= 1 && blocked.body.retryAfterSeconds <= 30);
-  assert.equal(blocked.retryAfter, String(blocked.body.retryAfterSeconds));
+  // A cooldown exists only for a real account, so a distinct 429 would reveal which numbers are registered: the answer is identical to the first one.
+  assert.equal(blocked.status, 200);
+  assert.deepEqual(blocked.body, accepted.body);
+  assert.equal(blocked.retryAfter, null, "no Retry-After header either");
   assert.equal(whatsapp.calls.length, 1, "nothing was sent");
   assert.equal(store.rows.length, 1, "nothing was created");
   assert.equal((await customerVerify(first)).status, 200, "the first code is still valid");
@@ -509,10 +511,10 @@ test("resend: at most 5 requests per hour per user; the sixth is refused until t
     waitOutCooldown();
   }
   const limited = await customerRequest();
-  assert.equal(limited.status, 429);
-  assert.match(limited.body.error, /Too many code requests/);
-  assert.ok(limited.body.retryAfterSeconds > 60);
-  assert.equal(whatsapp.calls.length, 5);
+  assert.equal(limited.status, 200, "same answer as an accepted request (no account oracle)");
+  assert.equal(limited.retryAfter, null);
+  assert.equal(whatsapp.calls.length, 5, "but no sixth message was sent");
+  assert.equal(store.rows.length, 5, "and no sixth code was created");
   store.age(3_600_000);
   assert.equal((await customerRequest()).status, 200, "allowed again after the hour");
 });
@@ -522,7 +524,9 @@ test("resend: failed deliveries still count towards the hourly cap (a provider i
   whatsapp.mode = "http500";
   for (let i = 0; i < LOGIN_OTP_POLICY.MAX_REQUESTS_PER_HOUR; i++) assert.equal((await customerRequest()).status, 503);
   whatsapp.mode = "ok";
-  assert.equal((await customerRequest()).status, 429);
+  const before = whatsapp.calls.length;
+  assert.equal((await customerRequest()).status, 200, "the cap holds (answered like any request)");
+  assert.equal(whatsapp.calls.length, before, "but nothing more is sent");
 });
 
 test("different users have independent codes, cooldowns and limits", async () => {
@@ -547,12 +551,10 @@ test("different users have independent codes, cooldowns and limits", async () =>
 test("simultaneous resend requests leave at most ONE usable code", async () => {
   reset();
   const results = await Promise.all(Array.from({ length: 6 }, () => customerRequest()));
-  const ok = results.filter((r) => r.status === 200);
-  const blocked = results.filter((r) => r.status === 429);
-  assert.ok(ok.length >= 1);
-  assert.equal(ok.length + blocked.length, 6, "every request got a clear answer");
+  assert.ok(results.every((r) => r.status === 200 && r.body.ok), "every request got the same answer");
+  assert.equal(store.rows.length, 1, "the check-and-insert runs under a lock: only ONE code was created, not one per request");
   assert.equal(store.activeFor("k1").length, 1, "one live code");
-  assert.equal(whatsapp.calls.length, ok.length, "a message only for requests that were accepted");
+  assert.equal(whatsapp.calls.length, 1, "one message");
   const sent = whatsapp.calls.map((c) => c.code);
   let accepted = 0;
   for (const c of sent) if ((await customerVerify(c)).status === 200) accepted++;
@@ -725,7 +727,8 @@ test("phone-only: resend replaces the old code, the cooldown applies, and the gu
   contactK1 = contact({ id: "zz", phone: "9000000001" });
   await phoneRequest();
   const first = sentCode();
-  assert.equal((await phoneRequest()).status, 429);
+  assert.equal((await phoneRequest()).status, 200, "answered like any request");
+  assert.equal(whatsapp.calls.length, 1, "but no second code during the cooldown");
   waitOutCooldown();
   assert.equal((await phoneRequest()).status, 200);
   assert.equal((await phoneVerify(first)).status, 401, "old code refused");
@@ -894,5 +897,7 @@ test("customer login accepts the serial number of any RECD unit of the order as 
   const bySerial = await customerRequest(N, "sn-0001"); // typed in lower case: serials are stored upper-case
   assert.equal(bySerial.status, 200);
   // the code really was created for the order's contact: asking again by ORDER NUMBER is held back by the 30 s resend cooldown
-  assert.equal((await customerRequest(N, ORDER)).status, 429, "the serial reached the same account as the order number");
+  const sentBefore = whatsapp.calls.length;
+  await customerRequest(N, ORDER);
+  assert.equal(whatsapp.calls.length, sentBefore, "the serial reached the same account as the order number (the order-number request was held back by the cooldown)");
 });

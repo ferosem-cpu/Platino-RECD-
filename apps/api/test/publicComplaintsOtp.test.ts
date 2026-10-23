@@ -15,6 +15,7 @@ import express from "express";
 import { ISSUE_CATEGORY, PUBLIC_OTP } from "@recd/shared";
 import { matchesCondition } from "./helpers/fakeOtpStore";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
+import { installFakeTransactions } from "./helpers/fakeTransactions";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -90,13 +91,13 @@ before(async () => {
     return whatsapp.mode === "http500" ? new Response("provider error", { status: 500 }) : new Response("{}", { status: 200 });
   }) as typeof fetch;
   const { prisma } = await import("../src/lib/prisma");
+  installFakeTransactions(prisma); // OTP limits are decided under advisory locks inside a transaction
   createFakeRateLimitStore().install(prisma); // the IP limiter keeps its counters in the database; here they live in memory
   const { publicComplaintsRouter } = await import("../src/routes/publicComplaints");
   for (const model of ["publicOtp", "recdUnit", "complaint", "complaintEvent", "user"]) {
     Object.defineProperty(prisma, model, { configurable: true, get: () => new Proxy({}, { get: (_t, fn: string) => (...a: any[]) => db[model]?.[fn]?.(...a) }) });
   }
   // The ticket and its CREATED history row are written in one transaction (R11): run it against the same in-memory stubs.
-  (prisma as any).$transaction = async (fn: any) => fn(prisma);
   const app = express();
   app.set("trust proxy", true);
   app.use(express.json());
@@ -257,6 +258,123 @@ test("resend: blocked for 30 s, then the NEW code works and the old one does not
   const limited = await requestOtp();
   assert.equal(limited.status, 429);
   assert.match(limited.body.error, /Too many code requests/);
+});
+
+// ---- R3: concurrency and failed delivery -------------------------------------------------------------------------
+
+test("rate limit: simultaneous requests cannot slip past the per-serial hourly cap (the count and the insert are one locked step)", async () => {
+  reset();
+  // 16 different numbers (so the 30 s per-number cooldown does not apply) asking about ONE serial at the same moment.
+  const phones = Array.from({ length: 16 }, (_, i) => `98765${String(10000 + i)}`);
+  const results = await Promise.all(phones.map((p) => requestOtp(SERIAL, p)));
+  const accepted = results.filter((r) => r.status === 200);
+  const limited = results.filter((r) => r.status === 429);
+  assert.equal(accepted.length, 10, "exactly the configured 10 per serial per hour");
+  assert.equal(limited.length, 6);
+  assert.equal(rows.length, 10, "and no more rows than the cap");
+  assert.equal(whatsapp.calls.length, 10, "and no more messages (each costs money and reaches a third party)");
+});
+
+test("rate limit: simultaneous requests for one number create exactly one code (the 30 s cooldown cannot be raced)", async () => {
+  reset();
+  const results = await Promise.all(Array.from({ length: 8 }, () => requestOtp()));
+  assert.equal(results.filter((r) => r.status === 200).length, 1);
+  assert.equal(results.filter((r) => r.status === 429).length, 7);
+  assert.equal(rows.length, 1);
+  assert.equal(whatsapp.calls.length, 1);
+});
+
+test("rate limit: simultaneous requests are counted per address too (20 per hour)", async () => {
+  reset();
+  // The same visitor address for every request (the fixed header), 25 different numbers and serials' worth of load.
+  const results = await Promise.all(
+    Array.from({ length: 25 }, (_, i) =>
+      fetch(`${base}/pc/otp/request`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": "10.9.9.9" },
+        body: JSON.stringify({ serialNo: `NO-SUCH-${i}`, phone: `98760${String(10000 + i)}` }),
+      }).then((r) => r.status),
+    ),
+  );
+  assert.equal(results.filter((s) => s === 200).length, 20);
+  assert.equal(results.filter((s) => s === 429).length, 5);
+  assert.equal(rows.length, 20);
+});
+
+test("failed delivery: the row is voided, a later successful resend works, and the failed code is never accepted", async () => {
+  reset();
+  whatsapp.mode = "http500";
+  const failed = await requestOtp();
+  assert.equal(failed.status, 200, "public answer unchanged");
+  const lostCode = sentCode(); // the provider was asked but refused: nobody received it
+  assert.equal(rows[0].deliveryStatus, "failed");
+  assert.ok(rows[0].expiresAt.getTime() <= Date.now(), "a failed row is expired at once");
+  assert.equal((await verifyOtp(lostCode)).status, 400, "an undelivered code is not a valid authentication code");
+
+  ageRows(31_000);
+  whatsapp.mode = "ok";
+  assert.equal((await requestOtp()).status, 200);
+  const delivered = sentCode();
+  assert.equal(rows[1].deliveryStatus, "sent");
+  assert.equal((await verifyOtp(lostCode)).status, 400, "the failed code still does not work");
+  assert.equal((await verifyOtp(delivered)).status, 200, "the delivered resend does");
+});
+
+test("failed delivery: a failed RESEND does not shadow the earlier code that was delivered", async () => {
+  reset();
+  await requestOtp();
+  const first = sentCode();
+  ageRows(31_000);
+  whatsapp.mode = "http500";
+  await requestOtp(); // newest row, but never delivered
+  assert.equal(rows[1].deliveryStatus, "failed");
+  whatsapp.mode = "ok";
+  assert.equal((await verifyOtp(first)).status, 200, "the person still has the code they did receive");
+});
+
+test("failed delivery: a provider that throws is a failed send, not a crash and not a usable code", async () => {
+  reset();
+  const realFetchNow = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    if (String(input?.url ?? input).includes("graph.facebook.com")) throw new Error("socket hang up");
+    return realFetchNow(input, init);
+  }) as typeof fetch;
+  try {
+    const r = await requestOtp();
+    assert.equal(r.status, 200);
+  } finally {
+    globalThis.fetch = realFetchNow;
+  }
+  assert.equal(rows[0].deliveryStatus, "failed");
+  assert.equal((await verifyOtp("123456")).status, 400);
+});
+
+test("failed delivery: a row that is still 'pending' (never confirmed) cannot be verified", async () => {
+  reset();
+  await requestOtp();
+  const code = sentCode();
+  rows[0].deliveryStatus = "pending";
+  assert.equal((await verifyOtp(code)).status, 400);
+});
+
+test("verify: single use - a session is issued once; and wrong guesses beyond the cap lock even the right code (per code)", async () => {
+  reset();
+  await requestOtp();
+  const code = sentCode();
+  const ok = await verifyOtp(code);
+  assert.equal(ok.status, 200);
+  assert.equal((await verifyOtp(code)).status, 400);
+  const parallel = await Promise.all([1, 2, 3, 4, 5, 6].map(() => verifyOtp(code)));
+  assert.equal(parallel.filter((r) => r.status === 200).length, 0);
+});
+
+test("verify: simultaneous guesses cannot exceed the attempt cap", async () => {
+  reset();
+  await requestOtp();
+  const code = sentCode();
+  await Promise.all(Array.from({ length: 12 }, () => verifyOtp(wrong(code))));
+  assert.equal(rows[0].attempts, PUBLIC_OTP.MAX_VERIFY_ATTEMPTS);
+  assert.equal((await verifyOtp(code)).status, 400);
 });
 
 test("ticket: no, malformed, unverified, expired or already-used session tokens cannot create a ticket", async () => {

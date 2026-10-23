@@ -6,7 +6,7 @@ import { apiErrorMessage } from "@/lib/apiError";
 import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
 import { DataTable } from "@/components/DataTable";
 import { useAuth } from "@/components/AuthContext";
-import { checkEmailInput, roleNeedsVendor, roleOptionsFor, rowActionsFor, userAdminErrorMessage } from "@/lib/userAdminUi";
+import { checkEmailInput, roleNeedsVendor, roleOptionsFor, rowActionsFor, userAdminErrorMessage, vendorRequiredOnEdit } from "@/lib/userAdminUi";
 
 interface UserRow {
   id: string;
@@ -192,7 +192,7 @@ export default function UsersPage() {
       // Only what the person can legitimately change is sent: the vendor only for a vendor-scoped role, and only when it changed.
       const body: Record<string, unknown> = { name: editForm.name, email: emailCheck.email, phone: cleanMobile(editForm.phone), title: editForm.title };
       if (editForm.roleKey !== editUser.role.key) body.roleKey = editForm.roleKey;
-      if (roleNeedsVendor(editForm.roleKey) && editForm.vendorId !== (editUser.vendorId ?? "")) body.vendorId = editForm.vendorId || null;
+      if (roleNeedsVendor(editForm.roleKey) && editForm.vendorId !== (editUser.vendorId ?? "")) body.vendorId = editForm.vendorId || null; // an unchanged vendor (including none) is never sent
       await api(`/users/${editUser.id}`, { method: "PUT", body: JSON.stringify(body) });
       setEditUser(null);
       setSuccess("User updated successfully");
@@ -618,14 +618,14 @@ export default function UsersPage() {
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Vendor</label>
                   <select
-                    required
+                    required={vendorRequiredOnEdit({ roleKey: editUser.role.key, vendorId: editUser.vendorId }, editForm.roleKey)}
                     disabled={editUser.id === actor?.id}
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
                     value={editForm.vendorId}
                     data-testid="edit-vendor"
                     onChange={(e) => setEditForm({ ...editForm, vendorId: e.target.value })}
                   >
-                    <option value="">Select a vendor</option>
+                    <option value="">{vendorRequiredOnEdit({ roleKey: editUser.role.key, vendorId: editUser.vendorId }, editForm.roleKey) ? "Select a vendor" : "No vendor (internal engineer)"}</option>
                     {vendors.filter((v) => v.status === "approved" || v.id === editUser.vendorId).map((v) => (
                       <option key={v.id} value={v.id}>{v.name}</option>
                     ))}

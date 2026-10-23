@@ -116,6 +116,7 @@ model User {
   regionAuditsMade           RegionManagerAudit[]       @relation("RegionAuditActor")
   amcVisitsCreated           AmcVisit[]                 @relation("AmcVisitCreator")
   complaintEvents            ComplaintEvent[]           @relation("ComplaintEventActor")
+  serialCorrections          RecdUnitSerialHistory[]    @relation("SerialCorrectionActor")
 }
 
 /// Login one-time codes (customer login and phone-only login). `code` holds an HMAC, never the code itself.
@@ -596,7 +597,7 @@ model Complaint {
   /// The physical RECD this ticket is about. At most one open ticket per unit (enforced by a
   /// partial unique index in the migration, which Prisma cannot express). Null on legacy tickets.
   unitId             String?
-  unit               RecdUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unit               RecdUnit? @relation(fields: [unitId], references: [id], onDelete: Restrict)
   /// portal (registered customer) | public (serial + mobile + OTP) - see COMPLAINT_SOURCE
   source             String    @default("portal")
   /// Who actually reported it. For public tickets this is a reseller / re-reseller / other person,
@@ -860,6 +861,23 @@ model RegionManager {
 // attach to the unit, identified by its globally-unique serial number.
 // ---------------------------------------------------------------------------
 
+/// Append-only record of every correction of an already-set RECD serial (Requirement 1). Restrict: a unit that has a correction history
+/// cannot be deleted. Existing tickets, reports and AMC links point at the unit (not the serial text), so they follow the corrected serial;
+/// AMC service reports keep their own `unitSerialNo` snapshot, which a correction never rewrites.
+model RecdUnitSerialHistory {
+  id               String   @id @default(cuid())
+  unitId           String
+  unit             RecdUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  previousSerialNo String
+  newSerialNo      String
+  reason           String
+  actorId          String?
+  actor            User?    @relation("SerialCorrectionActor", fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt        DateTime @default(now())
+
+  @@index([unitId, createdAt])
+}
+
 model RecdUnit {
   id         String         @id @default(cuid())
   /// Globally unique. Null only for legacy units awaiting entry ("serial pending");
@@ -885,6 +903,7 @@ model RecdUnit {
   amcOrders      AmcOrderUnit[]
   amcVisits      AmcVisit[]
   reminders      ServiceReminder[]
+  serialHistory  RecdUnitSerialHistory[]
 
   /// Warranty of THIS unit (Requirement 8). All NULL = not recorded (every legacy unit): never "active", never invented from an order /
   /// PO / dispatch / delivery / commissioning date. Both dates are inclusive calendar days; `warrantyMonths` is the EFFECTIVE duration
@@ -942,22 +961,22 @@ model PublicOtp {
 // ---------------------------------------------------------------------------
 
 model UserAuditLog {
-  id           String   @id @default(cuid())
-  actorId      String?
-  actor        User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  id               String   @id @default(cuid())
+  actorId          String?
+  actor            User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
   /// The live link to the affected account. SET NULL (not CASCADE) when that account is deleted, so deleting an account or a customer
   /// contact can never erase the history of what was done to it; `targetIdRecorded` / `targetName` keep the trail readable afterwards.
-  targetUserId String?
-  target       User?    @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  targetUserId     String?
+  target           User?    @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
   /// The affected account's id as a plain value (no foreign key) - written with every row, survives the account's deletion.
   targetIdRecorded String?
   /// The affected account's display name, filled in when the account is deleted (and backfilled for existing rows by the migration).
-  targetName   String?
+  targetName       String?
   /// see USER_AUDIT_ACTION in packages/shared
-  action       String
+  action           String
   /// Before/after values of whatever changed (never passwords/hashes).
-  changes      Json?
-  createdAt    DateTime @default(now())
+  changes          Json?
+  createdAt        DateTime @default(now())
 
   @@index([targetUserId, createdAt])
   @@index([targetIdRecorded, createdAt])
@@ -990,10 +1009,11 @@ model ServiceReport {
   customerId              String
   customer                Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
   siteId                  String?
-  site                    Site?      @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  /// RESTRICT (migration 20261101090000): a site that service reports point at cannot be deleted, so a report never loses its site.
+  site                    Site?      @relation(fields: [siteId], references: [id], onDelete: Restrict)
   /// The RECD (DG) the ticket is about; null on legacy tickets. The DG itself is the site + its units.
   unitId                  String?
-  unit                    RecdUnit?  @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unit                    RecdUnit?  @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
   createdById   String
   createdBy     User    @relation("ServiceReportCreator", fields: [createdById], references: [id])
@@ -1135,7 +1155,7 @@ model ServiceReminder {
   site         Site?     @relation(fields: [siteId], references: [id], onDelete: SetNull)
   siteName     String?
   unitId       String?
-  unit         RecdUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unit         RecdUnit? @relation(fields: [unitId], references: [id], onDelete: Restrict)
   /// Serial of the unit when the reminder was created; null when the activity has no unit / the unit has no serial.
   unitSerialNo String?
   /// Reference shown to people: the ticket number, or the AMC reference.
@@ -1196,9 +1216,9 @@ model ServiceReminderEvent {
 
 /// An AMC agreement with one of our existing Vendors. Deliberately separate from AmcOrder (customer AMC): the two never share rows.
 model VendorAmc {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   vendorId    String
-  vendor      Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  vendor      Vendor    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   /// The vendor's own reference for the agreement, if any.
   contractRef String?
   title       String
@@ -1210,12 +1230,12 @@ model VendorAmc {
   siteId      String?
   site        Site?     @relation(fields: [siteId], references: [id], onDelete: SetNull)
   /// Inclusive calendar dates (CHECK endDate > startDate in the migration).
-  startDate   DateTime @db.Date
-  endDate     DateTime @db.Date
+  startDate   DateTime  @db.Date
+  endDate     DateTime  @db.Date
   createdById String?
-  createdBy   User?    @relation("VendorAmcCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdBy   User?     @relation("VendorAmcCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   /// Same reminder bookkeeping as AmcOrder; a renewal resets it for the new period.
   lastExpiryReminderAt      DateTime?

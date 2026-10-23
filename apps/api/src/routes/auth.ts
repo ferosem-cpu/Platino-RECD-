@@ -138,11 +138,10 @@ const otpTiming = {
 /** Maps the outcome of requestLoginOtp to the HTTP answer. A failure is NEVER reported as "sent". */
 function respondToOtpRequest(res: import("express").Response, outcome: LoginOtpRequestOutcome) {
   if (outcome.kind === "throttled") {
-    res.setHeader("Retry-After", String(outcome.retryAfterSeconds));
-    return res.status(429).json({
-      error: outcome.reason === "cooldown" ? otpCooldownMessage(outcome.retryAfterSeconds) : OTP_LIMIT_MESSAGE,
-      retryAfterSeconds: outcome.retryAfterSeconds,
-    });
+    // A cooldown / hourly cap exists only for a REAL account, so answering 429 here would tell a caller which numbers are registered
+    // (an unknown number is always accepted). The caller gets the same reply as any other request; no new code was created, the earlier
+    // one (if any) stays valid until it expires, and the resend countdown in the body is the same for everyone.
+    return res.json(genericOtpAccepted());
   }
   if (outcome.kind === "delivery_failed") {
     return res.status(503).json({ error: OTP_DELIVERY_FAILED_MESSAGE, code: "OTP_DELIVERY_FAILED" });

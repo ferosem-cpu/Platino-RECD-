@@ -6,6 +6,7 @@ import { asString } from "../lib/params";
 import { findTakenSerials, takenSerialsMessage } from "../lib/serials";
 import { isSerialConflict, SERIAL_RACE_MESSAGE } from "../lib/uniqueViolations";
 import { assertOrderReferences, createNewOrder, OrderCreationError } from "../lib/orderCreation";
+import { isUnitHistoryViolation, unitHistoryBlockedMessage, unitHistoryBlockers } from "../lib/unitRetention";
 import { SITE_PEOPLE_INCLUDE } from "../lib/safeSelect";
 
 export const ordersRouter = Router();
@@ -152,10 +153,19 @@ ordersRouter.delete("/:id/line-items/:lineItemId", requirePermission(PERMISSION_
     return res.status(409).json({ error: "Cannot remove this unit - it has warranty history, which is kept for audit." });
   }
 
-  await prisma.$transaction([
-    prisma.recdUnit.deleteMany({ where: { lineItemId } }),
-    prisma.orderLineItem.delete({ where: { id: lineItemId } }),
-  ]);
+  const otherHistory = await unitHistoryBlockers({ lineItemId });
+  if (otherHistory.length) return res.status(409).json({ error: unitHistoryBlockedMessage(otherHistory, "unit") });
+
+  try {
+    await prisma.$transaction([
+      prisma.recdUnit.deleteMany({ where: { lineItemId } }),
+      prisma.orderLineItem.delete({ where: { id: lineItemId } }),
+    ]);
+  } catch (err) {
+    // A ticket / report was attached after the check above: the database (RESTRICT) refused, nothing was deleted.
+    if (isUnitHistoryViolation(err)) return res.status(409).json({ error: unitHistoryBlockedMessage(["service history"], "unit") });
+    throw err;
+  }
   res.status(204).end();
 });
 
@@ -195,20 +205,28 @@ ordersRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), asy
     return res.status(409).json({ error: "Cannot delete this order - one of its RECD units has warranty history, which is kept for audit." });
   }
 
-  await prisma.$transaction(async (tx) => {
-    if (siteId) {
-      await tx.siteContact.deleteMany({ where: { siteId } });
-      await tx.siteDocumentRequirement.deleteMany({ where: { siteId } });
-      await tx.recdDelivery.deleteMany({ where: { siteId } });
-      await tx.sitePhoto.deleteMany({ where: { siteId } });
-      await tx.siteStageEvent.deleteMany({ where: { siteId } });
-      await tx.pendingAction.deleteMany({ where: { siteId } });
-      await tx.site.delete({ where: { id: siteId } });
-    }
-    await tx.recdUnit.deleteMany({ where: { orderId } });
-    await tx.orderLineItem.deleteMany({ where: { orderId } });
-    await tx.order.delete({ where: { id: orderId } });
-  });
+  const otherHistory = await unitHistoryBlockers({ orderId });
+  if (otherHistory.length) return res.status(409).json({ error: unitHistoryBlockedMessage(otherHistory, "order") });
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (siteId) {
+        await tx.siteContact.deleteMany({ where: { siteId } });
+        await tx.siteDocumentRequirement.deleteMany({ where: { siteId } });
+        await tx.recdDelivery.deleteMany({ where: { siteId } });
+        await tx.sitePhoto.deleteMany({ where: { siteId } });
+        await tx.siteStageEvent.deleteMany({ where: { siteId } });
+        await tx.pendingAction.deleteMany({ where: { siteId } });
+        await tx.site.delete({ where: { id: siteId } });
+      }
+      await tx.recdUnit.deleteMany({ where: { orderId } });
+      await tx.orderLineItem.deleteMany({ where: { orderId } });
+      await tx.order.delete({ where: { id: orderId } });
+    });
+  } catch (err) {
+    if (isUnitHistoryViolation(err)) return res.status(409).json({ error: unitHistoryBlockedMessage(["service history"], "order") });
+    throw err;
+  }
 
   res.status(204).send();
 });

@@ -57,6 +57,15 @@ export const REGION_MAPPABLE_ROLE_KEYS = ["regional_manager", "service_manager"]
 /** The only reminder status a manager may acknowledge: delivered to everyone it was meant for and not yet acknowledged or closed. */
 export const ACKNOWLEDGEABLE_REMINDER_STATUS = REMINDER_STATUS.SENT;
 
+/**
+ * Statuses of a reminder that has NOT reached everyone it was meant for. They are still escalated (see escalationDue): a failed delivery
+ * must not hide an overdue activity from the next level. A reminder in one of these statuses may be acknowledged only after an escalation
+ * has actually gone out (escalationLevel >= 1) - that is what put it in front of somebody.
+ */
+export const UNDELIVERED_REMINDER_STATUSES: string[] = [REMINDER_STATUS.FAILED, REMINDER_STATUS.NO_RECIPIENT];
+/** Every status from which a reminder can be escalated. */
+export const ESCALATABLE_REMINDER_STATUSES: string[] = [REMINDER_STATUS.SENT, ...UNDELIVERED_REMINDER_STATUSES];
+
 export const MAX_REMINDER_ESCALATION_LEVEL = 2;
 export const MAX_DELIVERY_ATTEMPTS = 5;
 /** A reminder stuck in "sending" (the job died) can be picked up again after this long. */
@@ -88,16 +97,26 @@ export function reminderEligible(dueDate: Date | string | null | undefined, now:
   return s === "due_soon" || s === "overdue";
 }
 
-/** Is an unacknowledged reminder due for its next escalation level? */
+/**
+ * Is an unacknowledged reminder due for its next escalation level?
+ *  - A DELIVERED reminder (status sent) counts its hours from the delivery (`sentAt`), then from the previous escalation.
+ *  - An UNDELIVERED one (failed, or no recipient) never got a `sentAt`, so waiting for one would block escalation for ever: its hours count from
+ *    when the reminder was created (the moment the activity became due for a reminder), then from the previous escalation. Same hours, same levels.
+ */
 export function escalationDue(
-  r: { status: string; sentAt: Date | null; acknowledgedAt: Date | null; escalationLevel: number; lastEscalatedAt: Date | null },
+  r: { status: string; sentAt: Date | null; acknowledgedAt: Date | null; escalationLevel: number; lastEscalatedAt: Date | null; createdAt?: Date | null; escalationAttempts?: number | null },
   escalationHours: number | null | undefined,
   now: Date,
 ): boolean {
   if (escalationHours == null || escalationHours <= 0) return false;
-  if (r.status !== REMINDER_STATUS.SENT || r.acknowledgedAt || !r.sentAt) return false;
+  if (r.acknowledgedAt || !ESCALATABLE_REMINDER_STATUSES.includes(r.status)) return false;
   if (r.escalationLevel >= MAX_REMINDER_ESCALATION_LEVEL) return false;
-  const since = r.lastEscalatedAt ?? r.sentAt;
+  // A level that fell due and was already attempted (its delivery failed) stays due until it is delivered, even if the first reminder was
+  // delivered in the meantime and restarted the clock.
+  if ((r.escalationAttempts ?? 0) > 0) return true;
+  const start = r.status === REMINDER_STATUS.SENT ? r.sentAt : r.sentAt ?? r.createdAt ?? null;
+  const since = r.lastEscalatedAt ?? start;
+  if (!since) return false;
   return now.getTime() - since.getTime() >= escalationHours * 3600 * 1000;
 }
 

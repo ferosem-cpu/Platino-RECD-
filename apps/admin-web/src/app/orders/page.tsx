@@ -131,6 +131,10 @@ function OrdersPageInner() {
     e.preventDefault();
     setSaving(true);
     setFormError(null);
+    // Records created by THIS attempt only; if the order is then refused they are removed again, so a failed order leaves no orphan customer / product
+    // behind (and a retry does not pile up duplicates).
+    let createdCustomerId: string | null = null;
+    let createdProductId: string | null = null;
     try {
       let customerId = form.customerId;
       if (newCustomer) {
@@ -147,6 +151,7 @@ function OrdersPageInner() {
           }),
         });
         customerId = created.id;
+        createdCustomerId = created.id;
       }
       if (!customerId) throw new Error("Please choose or create a customer");
 
@@ -161,6 +166,7 @@ function OrdersPageInner() {
           }),
         });
         productId = created.id;
+        createdProductId = created.id;
       }
       if (!productId) throw new Error("Please choose or create a product");
       if (serialInputs.some((v) => !v.trim())) throw new Error(`Enter the RECD serial number for each of the ${qty} unit(s)`);
@@ -204,6 +210,9 @@ function OrdersPageInner() {
       setSerials([""]);
       load();
     } catch (err) {
+      // Best effort and safe: the API refuses to delete a customer / product that has any order, so this can only remove what this attempt made.
+      if (createdProductId) await api(`/products/${createdProductId}`, { method: "DELETE" }).catch(() => undefined);
+      if (createdCustomerId) await api(`/customers/${createdCustomerId}`, { method: "DELETE" }).catch(() => undefined);
       setFormError(withoutFieldPrefix(apiErrorMessage(err, "Failed to create order"), "recdSerials"));
     } finally {
       setSaving(false);

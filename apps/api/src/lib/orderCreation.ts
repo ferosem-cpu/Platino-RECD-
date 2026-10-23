@@ -13,9 +13,10 @@ import { isOrderNumberConflict } from "./uniqueViolations";
  *  - order, site and units are saved in ONE transaction, so a failure leaves nothing behind;
  *  - a generated-order-number collision is retried a bounded number of times, each retry in a fresh transaction.
  *
- * `POST /sites/:id/clone-order` deliberately does NOT use the duplicate check: a sibling order for the same physical
- * location is normally raised against the same PO (see routes/sites.ts). It still uses the reference checks and the
- * order-number retry below.
+ * `POST /sites/:id/clone-order` uses the SAME duplicate rule (`resolveDuplicatePo`, below): the PO it copies from the source
+ * order (or the one the caller enters) is checked against the customer's orders under the same lock, refused as `DUPLICATE_PO`
+ * unless an administrator role passes `allowDuplicatePo`, in which case the clone is created and flagged `poDuplicateFlag`.
+ * Before this, clone-order skipped the check, so any user with `manage_orders` could create a duplicate-PO order through it.
  */
 
 /** Roles that may knowingly create a second order for the same customer + PO number. */
@@ -60,6 +61,31 @@ type Tx = Prisma.TransactionClient;
  */
 async function lockCustomerPo(tx: Tx, customerId: string, poNumber: string) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('order-po:' || ${customerId}::text || ':' || lower(${poNumber}::text), 0))`;
+}
+
+/**
+ * The one duplicate-PO rule, run INSIDE the creating transaction (after taking the customer + PO lock): looks for another order of the same
+ * customer with the same PO (case-insensitive, trimmed) and returns the value for `poDuplicateFlag`. A duplicate is refused (409 DUPLICATE_PO)
+ * unless the caller asked to allow it AND holds an override role (`canOverrideDuplicatePo`); an approved duplicate is flagged on the order,
+ * which is the audit trail. Another customer's identical PO is NOT a duplicate (the rule is per customer). A blank PO (legacy) is not checked.
+ */
+export async function resolveDuplicatePo(
+  tx: Tx,
+  args: { customerId: string; poNumber: string | null | undefined; allowDuplicatePo?: boolean; roleKey: string | null | undefined },
+): Promise<boolean> {
+  const poNumber = args.poNumber?.trim();
+  if (!poNumber) return false;
+  await lockCustomerPo(tx, args.customerId, poNumber);
+  const dupe = await tx.order.findFirst({
+    where: { customerId: args.customerId, poNumber: { equals: poNumber, mode: "insensitive" } },
+    select: { orderNumber: true },
+  });
+  if (!dupe) return false;
+  const mayOverride = canOverrideDuplicatePo(args.roleKey);
+  if (!(args.allowDuplicatePo && mayOverride)) {
+    throw new OrderCreationError(409, duplicatePoMessage(poNumber, dupe.orderNumber, mayOverride), "DUPLICATE_PO", dupe.orderNumber);
+  }
+  return true;
 }
 
 /** Throws a 400 when the customer or product does not exist (used before anything is written). */
@@ -118,22 +144,10 @@ export async function createNewOrder(input: NewOrderInput) {
   const poNumber = input.poNumber.trim();
   if (!poNumber) throw new OrderCreationError(400, "PO number is required");
   await assertOrderReferences(prisma, input.customerId, [input.productId]);
-  const mayOverride = canOverrideDuplicatePo(input.roleKey);
 
   return withOrderNumber((orderNumber) =>
     prisma.$transaction(async (tx) => {
-      await lockCustomerPo(tx, input.customerId, poNumber);
-      const dupe = await tx.order.findFirst({
-        where: { customerId: input.customerId, poNumber: { equals: poNumber, mode: "insensitive" } },
-        select: { orderNumber: true },
-      });
-      let poDuplicateFlag = false;
-      if (dupe) {
-        if (!(input.allowDuplicatePo && mayOverride)) {
-          throw new OrderCreationError(409, duplicatePoMessage(poNumber, dupe.orderNumber, mayOverride), "DUPLICATE_PO", dupe.orderNumber);
-        }
-        poDuplicateFlag = true;
-      }
+      const poDuplicateFlag = await resolveDuplicatePo(tx, { customerId: input.customerId, poNumber, allowDuplicatePo: input.allowDuplicatePo, roleKey: input.roleKey });
 
       const firstStage = await tx.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
       const created = await tx.order.create({

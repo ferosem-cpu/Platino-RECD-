@@ -149,7 +149,14 @@ describe("AMC service reports against the real test database", { skip }, () => {
       if (prisma) {
         const amcIds = [...tracked.amcIds];
         const reports = await prisma.serviceReport.findMany({ where: { amcOrderId: { in: amcIds } }, select: { id: true, signatureFileId: true, pdfFileId: true } });
-        await prisma.serviceReport.deleteMany({ where: { id: { in: reports.map((r: any) => r.id) } } }); // their events cascade
+        // The disposable test database only: final (signed / submitted) reports cannot be deleted any more (migration 20261101090000), so the
+        // guard is switched off for this clean-up of the rows THIS run created, and switched on again straight after.
+        await prisma.$executeRawUnsafe('ALTER TABLE "ServiceReport" DISABLE TRIGGER "ServiceReport_final_no_delete"');
+        try {
+          await prisma.serviceReport.deleteMany({ where: { id: { in: reports.map((r: any) => r.id) } } }); // their events cascade
+        } finally {
+          await prisma.$executeRawUnsafe('ALTER TABLE "ServiceReport" ENABLE TRIGGER "ServiceReport_final_no_delete"');
+        }
         await prisma.reportFile.deleteMany({ where: { id: { in: reports.flatMap((r: any) => [r.signatureFileId, r.pdfFileId]).filter(Boolean) } } });
         await prisma.amcOrder.deleteMany({ where: { id: { in: amcIds } } }); // unit links cascade
         await prisma.recdUnit.deleteMany({ where: { id: { in: [...tracked.unitIds] } } });
@@ -461,10 +468,17 @@ describe("AMC service reports against the real test database", { skip }, () => {
     await sign(w.contact, r);
     const row = await prisma.serviceReport.findUniqueOrThrow({ where: { id: r.id } });
     const file = await prisma.reportFile.findUniqueOrThrow({ where: { id: row.pdfFileId } });
-    await prisma.reportFile.update({ where: { id: file.id }, data: { data: Buffer.concat([Buffer.from(file.data), Buffer.from("x")]) } });
-    const bad = await call(w.contact, "GET", `/service-reports/${r.id}/pdf`);
-    assert.deepEqual([bad.status, bad.body.code], [500, "FILE_INTEGRITY"]);
-    await prisma.reportFile.update({ where: { id: file.id }, data: { data: file.data } });
+    // The database now refuses to change a stored report file (migration 20261101090000), so the damage is simulated the way real corruption
+    // would arrive - outside the application - by switching that guard off for these two statements only (disposable test database).
+    await prisma.$executeRawUnsafe('ALTER TABLE "ReportFile" DISABLE TRIGGER "ReportFile_referenced_is_final"');
+    try {
+      await prisma.reportFile.update({ where: { id: file.id }, data: { data: Buffer.concat([Buffer.from(file.data), Buffer.from("x")]) } });
+      const bad = await call(w.contact, "GET", `/service-reports/${r.id}/pdf`);
+      assert.deepEqual([bad.status, bad.body.code], [500, "FILE_INTEGRITY"]);
+      await prisma.reportFile.update({ where: { id: file.id }, data: { data: file.data } });
+    } finally {
+      await prisma.$executeRawUnsafe('ALTER TABLE "ReportFile" ENABLE TRIGGER "ReportFile_referenced_is_final"');
+    }
     assert.equal((await call(w.contact, "GET", `/service-reports/${r.id}/pdf`)).status, 200);
     await assert.rejects(prisma.reportFile.delete({ where: { id: file.id } }), (e: any) => e.code === "P2003", "a file a report points at cannot be deleted");
   });

@@ -26,6 +26,7 @@ import { INDIAN_MOBILE_MESSAGE, PERMISSION_KEY, ROLE_KEY, mobileStorageVariants 
 import { hashLoginOtp } from "../src/lib/loginOtp";
 import { createFakeOtpStore } from "./helpers/fakeOtpStore";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
+import { installFakeTransactions } from "./helpers/fakeTransactions";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -68,13 +69,13 @@ before(async () => {
   const { vendorsRouter } = await import("../src/routes/vendors");
   const { sitesRouter } = await import("../src/routes/sites");
   const { authRouter } = await import("../src/routes/auth");
+  installFakeTransactions(prisma); // OTP limits are decided under advisory locks inside a transaction
   for (const model of ["user", "customer", "role", "order", "vendor", "site", "siteContact", "otpCode", "notificationLog", "userAuditLog"]) {
     Object.defineProperty(prisma, model, {
       configurable: true,
       get: () => new Proxy({}, { get: (_t, fn: string) => (...a: any[]) => db[model]?.[fn]?.(...a) }),
     });
   }
-  (prisma as any).$transaction = async (arg: any) => (typeof arg === "function" ? arg(prisma) : Promise.all(arg));
   tokenFor = (u) => signToken({ userId: users[u].id, roleKey: users[u].role, customerId: null });
 
   const app = express();

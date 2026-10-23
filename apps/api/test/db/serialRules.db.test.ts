@@ -115,7 +115,11 @@ describe("RECD serial rules against the real test database", { skip }, () => {
     await prisma.complaint.deleteMany({ where: { id: { in: complaints.map((c: any) => c.id) } } });
     await prisma.agentConversation.deleteMany({ where: { OR: [{ id: { in: [...tracked.conversationIds] } }, { title: { startsWith: PREFIX } }] } });
     await prisma.amcOrder.deleteMany({ where: { OR: [{ id: { in: [...tracked.amcIds] } }, { poNo: { startsWith: PREFIX } }] } });
-    await prisma.recdUnit.deleteMany({ where: { id: { in: [...units.map((u: any) => u.id), ...tracked.unitIds] } } });
+    const unitIdsToDelete = [...units.map((u: any) => u.id), ...tracked.unitIds];
+    // Restrict foreign keys: records that keep a unit alive go first (only ever rows these tests created).
+    await prisma.recdUnitSerialHistory.deleteMany({ where: { unitId: { in: unitIdsToDelete } } });
+    await prisma.warrantyHistory.deleteMany({ where: { unitId: { in: unitIdsToDelete } } });
+    await prisma.recdUnit.deleteMany({ where: { id: { in: unitIdsToDelete } } });
     await prisma.orderLineItem.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma.site.deleteMany({ where: { id: { in: siteIds } } });
     await prisma.order.deleteMany({ where: { id: { in: orderIds } } });
@@ -247,7 +251,8 @@ describe("RECD serial rules against the real test database", { skip }, () => {
     const basePo = order.poNumber as string;
     for (let round = 0; round < 4; round++) {
       const s = serial("CL");
-      const body = { productId, quantity: 1, recdSerials: [s] };
+      // the clone reuses the source PO, which the duplicate-PO rule now covers: an administrator approves the duplicate (this test is about serials)
+      const body = { productId, quantity: 1, recdSerials: [s], allowDuplicatePo: true };
       const before = await prisma.order.count({ where: { poNumber: basePo } });
       const [r1, r2] = await Promise.all([call("admin", "POST", `/sites/${siteId}/clone-order`, body), call("admin", "POST", `/sites/${siteId}/clone-order`, body)]);
       for (const r of [r1, r2]) if (r.status === 201) tracked.orderIds.add(r.body.id);
@@ -623,7 +628,7 @@ describe("RECD serial rules against the real test database", { skip }, () => {
     const { siteId, order } = await makeOrder(custA, [serial("CLN-BASE")]);
     await occupyOrderNumber();
     const s = serial("CLN");
-    const r = await withRandom(0.9999999, () => call("admin", "POST", `/sites/${siteId}/clone-order`, { productId, quantity: 1, recdSerials: [s] }));
+    const r = await withRandom(0.9999999, () => call("admin", "POST", `/sites/${siteId}/clone-order`, { productId, quantity: 1, recdSerials: [s], allowDuplicatePo: true }));
     assert.equal(r.status, 409, JSON.stringify(r.body));
     assert.equal(r.body.code, "ORDER_NUMBER_EXHAUSTED");
     assert.doesNotMatch(r.body.error, /serial/i);
@@ -819,6 +824,222 @@ describe("RECD serial rules against the real test database", { skip }, () => {
     const fewer = await call("admin", "POST", "/amc-orders", { ...amc(custA, units.map((u: any) => u.id)), qty: 1 });
     for (const r of [more, fewer]) { assert.equal(r.status, 201, JSON.stringify(r.body)); tracked.amcIds.add(r.body.id); }
   });
+
+  // ------------------------------------------------------------------------------------------
+  // R1 defects D1-D3 against the real database
+  // ------------------------------------------------------------------------------------------
+
+  async function legacyUnit(orderId: string, siteId: string) {
+    const u = await prisma.recdUnit.create({ data: { orderId, siteId, productId } });
+    tracked.unitIds.add(u.id);
+    return u;
+  }
+  async function addLineItem(orderId: string, tag: string) {
+    const s = serial(tag);
+    const r = await call("admin", "POST", `/orders/${orderId}/line-items`, { productId, quantity: 1, recdSerials: [s] });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const unit = await prisma.recdUnit.findUniqueOrThrow({ where: { serialNo: s } });
+    tracked.unitIds.add(unit.id);
+    return { lineItemId: r.body.id as string, unit, serialNo: s };
+  }
+  const serialOf = async (unitId: string) => (await prisma.recdUnit.findUniqueOrThrow({ where: { id: unitId } })).serialNo;
+
+  test("D1: a serial is assigned to a serial-less unit once; a taken serial and an overwrite are refused and change nothing", async () => {
+    const { order, siteId, units } = await makeOrder(custA, [serial("D1-BASE")]);
+    const u = await legacyUnit(order.id, siteId);
+    const s = serial("D1-A");
+
+    const ok = await call("admin", "PUT", `/recd-units/${u.id}/serial`, { serialNo: s.toLowerCase() });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(await serialOf(u.id), s.toUpperCase(), "stored normalised");
+
+    const overwrite = await call("admin", "PUT", `/recd-units/${u.id}/serial`, { serialNo: serial("D1-B") });
+    assert.equal(overwrite.status, 409);
+    assert.match(overwrite.body.error, /already has a serial/);
+    assert.equal(await serialOf(u.id), s.toUpperCase(), "the serial was not overwritten");
+
+    const other = await legacyUnit(order.id, siteId);
+    const taken = await call("admin", "PUT", `/recd-units/${other.id}/serial`, { serialNo: units[0].serialNo });
+    assert.equal(taken.status, 409);
+    assert.match(taken.body.error, /already registered/);
+    assert.equal(await serialOf(other.id), null, "the second unit stays serial-less");
+  });
+
+  test("D1: two simultaneous assignments of DIFFERENT serials to the same serial-less unit - exactly one wins and the unit keeps exactly that serial", async () => {
+    const { order, siteId } = await makeOrder(custA, [serial("D1R-BASE")]);
+    for (let round = 0; round < 8; round++) {
+      const u = await legacyUnit(order.id, siteId);
+      const [sa, sb] = [serial("D1R-A"), serial("D1R-B")];
+      const [ra, rb] = await Promise.all([
+        call("admin", "PUT", `/recd-units/${u.id}/serial`, { serialNo: sa }),
+        call("admin", "PUT", `/recd-units/${u.id}/serial`, { serialNo: sb }),
+      ]);
+      assert.deepEqual([ra.status, rb.status].sort(), [200, 409], `round ${round}: ${JSON.stringify([ra.body, rb.body])}`);
+      const [winner, loser, loserSerial, winnerSerial] = ra.status === 200 ? [ra, rb, sb, sa] : [rb, ra, sa, sb];
+      assert.match(loser.body.error, /already has a serial/);
+      assert.equal(winner.body.serialNo, winnerSerial);
+      assert.equal(await serialOf(u.id), winnerSerial, "the unit ends with exactly the winner's serial");
+      assert.equal(await prisma.recdUnit.count({ where: { serialNo: loserSerial } }), 0, "the loser's serial was not written anywhere");
+    }
+  });
+
+  test("D2: a unit with a ticket cannot be removed through its order line item - the unit, serial and ticket are untouched", async () => {
+    const { order, siteId } = await makeOrder(custA, [serial("D2-BASE")]);
+    const { lineItemId, unit, serialNo } = await addLineItem(order.id, "D2-LI");
+    const t = await call("custA", "POST", "/complaints", complaint(siteId, { unitId: unit.id }));
+    assert.equal(t.status, 201, JSON.stringify(t.body));
+
+    const del = await call("admin", "DELETE", `/orders/${order.id}/line-items/${lineItemId}`);
+    assert.equal(del.status, 409, JSON.stringify(del.body));
+    assert.match(del.body.error, /service ticket/);
+    assert.match(del.body.error, /kept as service history/);
+    assert.equal(await serialOf(unit.id), serialNo, "serial still registered");
+    assert.equal(await prisma.orderLineItem.count({ where: { id: lineItemId } }), 1, "line item kept");
+    const ticket = await prisma.complaint.findUniqueOrThrow({ where: { id: t.body.id } });
+    assert.equal(ticket.unitId, unit.id, "the ticket still points at its unit (not detached)");
+
+    // The database itself refuses, even if the API check were bypassed (this was ON DELETE SET NULL before).
+    await assert.rejects(prisma.recdUnit.delete({ where: { id: unit.id } }), (e: any) => e.code === "P2003");
+    assert.equal((await prisma.complaint.findUniqueOrThrow({ where: { id: t.body.id } })).unitId, unit.id);
+
+    // The order route already refused orders with tickets; it still does.
+    const delOrder = await call("admin", "DELETE", `/orders/${order.id}`);
+    assert.equal(delOrder.status, 400);
+    assert.equal(await prisma.recdUnit.count({ where: { id: unit.id } }), 1);
+  });
+
+  test("D2: AMC coverage, warranty history and a correction history each protect the unit; an untouched unit can still be removed", async () => {
+    const { order } = await makeOrder(custA, [serial("D2B-BASE")]);
+
+    const amcItem = await addLineItem(order.id, "D2B-AMC");
+    const a = await call("admin", "POST", "/amc-orders", amc(custA, [amcItem.unit.id]));
+    assert.equal(a.status, 201, JSON.stringify(a.body));
+    tracked.amcIds.add(a.body.id);
+    const amcDel = await call("admin", "DELETE", `/orders/${order.id}/line-items/${amcItem.lineItemId}`);
+    assert.equal(amcDel.status, 409); assert.match(amcDel.body.error, /AMC/);
+
+    const warrantyItem = await addLineItem(order.id, "D2B-W");
+    await prisma.warrantyHistory.create({
+      data: { unitId: warrantyItem.unit.id, kind: "established", newStartDate: new Date("2026-01-01"), newEndDate: new Date("2026-12-31"), newSource: "manual" },
+    });
+    const wDel = await call("admin", "DELETE", `/orders/${order.id}/line-items/${warrantyItem.lineItemId}`);
+    assert.equal(wDel.status, 409); assert.match(wDel.body.error, /warranty history/);
+
+    const corrItem = await addLineItem(order.id, "D2B-C");
+    const fix = await call("admin", "PATCH", `/recd-units/${corrItem.unit.id}/serial`, { expectedSerialNo: corrItem.serialNo, serialNo: serial("D2B-C2"), reason: "typo at order entry" });
+    assert.equal(fix.status, 200, JSON.stringify(fix.body));
+    const cDel = await call("admin", "DELETE", `/orders/${order.id}/line-items/${corrItem.lineItemId}`);
+    assert.equal(cDel.status, 409); assert.match(cDel.body.error, /correction history/);
+
+    for (const item of [amcItem, warrantyItem, corrItem]) {
+      assert.equal(await prisma.recdUnit.count({ where: { id: item.unit.id } }), 1, "protected unit kept");
+      assert.equal(await prisma.orderLineItem.count({ where: { id: item.lineItemId } }), 1, "its line item kept");
+    }
+    assert.equal(await prisma.recdUnitSerialHistory.count({ where: { unitId: corrItem.unit.id } }), 1, "history untouched");
+
+    const plain = await addLineItem(order.id, "D2B-PLAIN");
+    const ok = await call("admin", "DELETE", `/orders/${order.id}/line-items/${plain.lineItemId}`);
+    assert.equal(ok.status, 204);
+    assert.equal(await prisma.recdUnit.count({ where: { id: plain.unit.id } }), 0, "a unit with no history is removed");
+  });
+
+  test("D3: an administrator corrects a serial; it is audited, other roles are refused, and history stays attached to the unit", async () => {
+    const { order, siteId } = await makeOrder(custA, [serial("D3-BASE")]);
+    const { unit, serialNo } = await addLineItem(order.id, "D3-WRONG");
+    const t = await call("custA", "POST", "/complaints", complaint(siteId, { unitId: unit.id }));
+    assert.equal(t.status, 201, JSON.stringify(t.body));
+    const a = await call("admin", "POST", "/amc-orders", amc(custA, [unit.id]));
+    assert.equal(a.status, 201, JSON.stringify(a.body));
+    tracked.amcIds.add(a.body.id);
+
+    const fixed = serial("D3-RIGHT");
+    const body = { expectedSerialNo: serialNo, serialNo: fixed, reason: "Typed the wrong digit at order entry" };
+
+    for (const as of ["sales", "service", "custA", "vendorEng", "fieldEng"]) {
+      const denied = await call(as, "PATCH", `/recd-units/${unit.id}/serial`, body);
+      assert.ok([401, 403].includes(denied.status), `${as}: ${denied.status}`);
+    }
+    assert.equal((await call(null, "PATCH", `/recd-units/${unit.id}/serial`, body)).status, 401);
+    assert.equal(await serialOf(unit.id), serialNo, "nothing changed for refused callers");
+    assert.equal(await prisma.recdUnitSerialHistory.count({ where: { unitId: unit.id } }), 0);
+
+    const ok = await call("admin", "PATCH", `/recd-units/${unit.id}/serial`, body);
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.serialNo, fixed);
+    assert.equal(await serialOf(unit.id), fixed);
+
+    const rows = await prisma.recdUnitSerialHistory.findMany({ where: { unitId: unit.id } });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].previousSerialNo, serialNo);
+    assert.equal(rows[0].newSerialNo, fixed);
+    assert.equal(rows[0].reason, body.reason);
+    assert.equal(rows[0].actorId, userIds.admin);
+    assert.ok(rows[0].createdAt instanceof Date);
+
+    // History is keyed to the unit, so it follows the corrected serial and nothing was rewritten.
+    const hist = await call("admin", "GET", `/recd-units/${unit.id}/history`);
+    assert.equal(hist.status, 200);
+    assert.deepEqual(hist.body.complaints.map((c: any) => c.ticketNumber), [t.body.ticketNumber]);
+    assert.equal((await prisma.complaint.findUniqueOrThrow({ where: { id: t.body.id } })).unitId, unit.id);
+    assert.equal(await prisma.amcOrderUnit.count({ where: { unitId: unit.id } }), 1);
+    assert.equal(await prisma.recdUnit.count({ where: { serialNo: serialNo } }), 0, "the wrong serial is no longer registered to anything");
+  });
+
+  test("D3: invalid, duplicate, stale and no-op corrections are refused and leave the original serial and history unchanged", async () => {
+    const { units } = await makeOrder(custA, [serial("D3B-1"), serial("D3B-2")]);
+    const [u1, u2] = units;
+    const url = `/recd-units/${u1.id}/serial`;
+    const reason = "typo at order entry";
+    const cases: [string, unknown, number][] = [
+      ["invalid characters", { expectedSerialNo: u1.serialNo, serialNo: "not valid!", reason }, 400],
+      ["blank", { expectedSerialNo: u1.serialNo, serialNo: "   ", reason }, 400],
+      ["too short", { expectedSerialNo: u1.serialNo, serialNo: "AB", reason }, 400],
+      ["missing reason", { expectedSerialNo: u1.serialNo, serialNo: serial("D3B-NEW") }, 400],
+      ["same serial (other case)", { expectedSerialNo: u1.serialNo, serialNo: u1.serialNo.toLowerCase(), reason }, 400],
+      ["duplicate of another unit (case-insensitive)", { expectedSerialNo: u1.serialNo, serialNo: u2.serialNo.toLowerCase(), reason }, 409],
+      ["stale expected serial", { expectedSerialNo: serial("D3B-NOTTHIS"), serialNo: serial("D3B-NEW"), reason }, 409],
+    ];
+    for (const [name, payload, status] of cases) {
+      const r = await call("admin", "PATCH", url, payload);
+      assert.equal(r.status, status, `${name}: ${JSON.stringify(r.body)}`);
+      assert.equal(await serialOf(u1.id), u1.serialNo, `${name}: original serial kept`);
+      assert.equal(await serialOf(u2.id), u2.serialNo, `${name}: other unit untouched`);
+    }
+    assert.equal(await prisma.recdUnitSerialHistory.count({ where: { unitId: { in: [u1.id, u2.id] } } }), 0, "no audit row for a failed correction");
+    assert.equal((await call("admin", "PATCH", "/recd-units/does-not-exist/serial", { expectedSerialNo: "AAA-1", serialNo: "BBB-2", reason })).status, 404);
+  });
+
+  test("D3: simultaneous corrections cannot both succeed - one wins, one audit row, and the unit ends with exactly the winner's serial", async () => {
+    for (let round = 0; round < 6; round++) {
+      const { units } = await makeOrder(custA, [serial("D3C")]);
+      const u = units[0];
+      const [sa, sb] = [serial("D3C-A"), serial("D3C-B")];
+      const [ra, rb] = await Promise.all([
+        call("admin", "PATCH", `/recd-units/${u.id}/serial`, { expectedSerialNo: u.serialNo, serialNo: sa, reason: "first correction" }),
+        call("admin", "PATCH", `/recd-units/${u.id}/serial`, { expectedSerialNo: u.serialNo, serialNo: sb, reason: "second correction" }),
+      ]);
+      assert.deepEqual([ra.status, rb.status].sort(), [200, 409], `round ${round}: ${JSON.stringify([ra.body, rb.body])}`);
+      const winnerSerial = ra.status === 200 ? sa : sb;
+      assert.equal(await serialOf(u.id), winnerSerial);
+      const rows = await prisma.recdUnitSerialHistory.findMany({ where: { unitId: u.id } });
+      assert.equal(rows.length, 1, "exactly one audit row");
+      assert.deepEqual([rows[0].previousSerialNo, rows[0].newSerialNo], [u.serialNo, winnerSerial]);
+    }
+  });
+
+  test("D3: two units corrected to the same serial at once - one wins (unique index), the other keeps its serial and writes no audit row", async () => {
+    for (let round = 0; round < 4; round++) {
+      const { units } = await makeOrder(custA, [serial("D3D-1"), serial("D3D-2")]);
+      const target = serial("D3D-T");
+      const rs = await Promise.all(units.map((u: any) => call("admin", "PATCH", `/recd-units/${u.id}/serial`, { expectedSerialNo: u.serialNo, serialNo: target, reason: "same target" })));
+      assert.deepEqual(rs.map((r) => r.status).sort(), [200, 409], JSON.stringify(rs.map((r) => r.body)));
+      assert.equal(await prisma.recdUnit.count({ where: { serialNo: target } }), 1);
+      assert.equal(await prisma.recdUnitSerialHistory.count({ where: { unitId: { in: units.map((u: any) => u.id) } } }), 1);
+      const loserIdx = rs.findIndex((r) => r.status === 409);
+      assert.equal(await serialOf(units[loserIdx].id), units[loserIdx].serialNo, "the loser kept its original serial");
+    }
+  });
+
 });
 
 // Runs even when the guard skips everything above, so a skipped run is never silently empty.

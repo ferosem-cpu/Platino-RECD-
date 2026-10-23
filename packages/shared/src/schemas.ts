@@ -137,6 +137,16 @@ export const addOrderLineItemSchema = z.object({
 /** Sets the serial on a unit that was created without one (legacy / agent-created). */
 export const setRecdSerialSchema = z.object({ serialNo: recdSerialSchema });
 
+/**
+ * Corrects a serial that was entered wrongly. `expectedSerialNo` is the serial the caller is looking at: the change is applied only if the
+ * unit still carries it, so two people correcting the same unit cannot silently overwrite each other. A reason is mandatory (audit trail).
+ */
+export const correctRecdSerialSchema = z.object({
+  expectedSerialNo: recdSerialSchema,
+  serialNo: recdSerialSchema,
+  reason: z.string().trim().min(5, "Give a reason of at least 5 characters").max(500),
+});
+
 export const createRegionSchema = z.object({
   name: z.string().trim().min(2).max(80),
 });
@@ -155,6 +165,11 @@ export const setSiteRegionSchema = z.object({ regionId: z.string().nullable() })
 export const cloneOrderForSiteSchema = z.object({
   productId: z.string(),
   quantity: z.number().int().positive(),
+  /** The new order's PO. Omitted = the source order's PO (then the duplicate-PO rule applies to it like to any other order). */
+  poNumber: z.string().trim().min(1).max(60).optional(),
+  poDate: z.string().optional(),
+  /** Honoured only for administrator roles (canOverrideDuplicatePo); the order is then flagged as an approved duplicate. */
+  allowDuplicatePo: z.boolean().optional(),
   /** One serial per unit. */
   recdSerials: z.array(recdSerialSchema),
 }).superRefine((v, ctx) => {

@@ -553,6 +553,53 @@ describe("service reminders against the real test database", { skip }, () => {
     assert.equal(r.escalationLevel, 1, "stale lease: taken over and delivered");
   });
 
+  test("R6: an UNDELIVERED reminder is still escalated after the approved hours (counted from creation), exactly once under overlapping runs, and the escalated people can take it over", async () => {
+    await setPolicy(3, 24);
+    emailFail.add(W.sm1.id); // the first-line manager's e-mail keeps failing
+    const t = await makeTicket(W.northCo, off(-2));
+    await runReminderJob(new Date());
+    let r = await reminderOf(t.ticket.id);
+    assert.deepEqual([r.status, r.sentAt], ["failed", null], "a failed reminder is not treated as delivered");
+    assert.equal((await call(W.sm1, "POST", `/reminders/${r.id}/acknowledge`)).status, 409, "and, before any escalation, cannot be acknowledged");
+
+    await runReminderJob(new Date(Date.now() + 23 * 3600 * 1000));
+    assert.equal((await reminderOf(t.ticket.id)).escalationLevel, 0, "23 h: too early");
+    const later = new Date(Date.now() + 25 * 3600 * 1000);
+    await Promise.all([runReminderJob(later), runReminderJob(later), runReminderJob(later)]);
+    await runReminderJob(later);
+    r = await reminderOf(t.ticket.id);
+    assert.equal(r.status, "failed", "escalating does not rewrite the first reminder's outcome");
+    assert.equal(r.escalationLevel, 1, "the failure did not block the escalation");
+    assert.equal((await eventsOf(r.id, "escalated")).filter((e: any) => e.level === 1).length, 1, "one escalation despite four runs");
+    assert.equal((await eventsOf(r.id, "sent")).filter((e: any) => e.level === 1 && e.recipientId === W.rm1.id).length, 1, "the Regional Manager was e-mailed once");
+
+    const ack = await call(W.rm1, "POST", `/reminders/${r.id}/acknowledge`);
+    assert.equal(ack.status, 200, JSON.stringify(ack.body));
+    assert.equal((await reminderOf(t.ticket.id)).status, "acknowledged");
+    await runReminderJob(new Date(Date.now() + 80 * 3600 * 1000));
+    assert.equal((await reminderOf(t.ticket.id)).escalationLevel, 1, "acknowledged: no further escalation");
+    emailFail.delete(W.sm1.id);
+  });
+
+  test("R6: a resolved ticket's undelivered reminder is closed, not escalated; a repeatedly failing one stops its own retries but still escalates", async () => {
+    await setPolicy(3, 24);
+    emailFail.add(W.sm1.id);
+    const done = await makeTicket(W.northCo, off(-2));
+    const failing = await makeTicket(W.southCo ?? W.northCo, off(-3));
+    for (let i = 0; i < 6; i++) await runReminderJob(new Date(Date.now() + i * 60_000));
+    const rDone = await reminderOf(done.ticket.id);
+    assert.equal(rDone.status, "failed");
+    assert.equal(rDone.attempts, 5, "first-line retries stop at the limit");
+    await prisma.complaint.update({ where: { id: done.ticket.id }, data: { status: "resolved" } });
+    const later = new Date(Date.now() + 30 * 3600 * 1000);
+    await runReminderJob(later);
+    const closed = await reminderOf(done.ticket.id);
+    assert.deepEqual([closed.status, closed.escalationLevel], ["closed", 0]);
+    assert.equal((await eventsOf(closed.id, "escalated")).length, 0);
+    assert.ok(failing, "the other ticket's reminder is handled in the same runs");
+    emailFail.delete(W.sm1.id);
+  });
+
   test("acknowledgement: only a delivered reminder can be acknowledged - waiting, failed, partly delivered and no-recipient reminders are refused by the server, and a race on a delivered one records one", async () => {
     await setPolicy(3, null);
     const smB = await addNorthManager("sm-north-c");

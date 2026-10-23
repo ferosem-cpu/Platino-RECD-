@@ -84,8 +84,12 @@ test("entry points: ticket list (staff), customer portal, and the RECD unit hist
   assert.match(unitPage, /download=\{reportFileName\(c\.ticketNumber, c\.serviceReportUrl\)\}/);
 });
 
-test("the service-report routes are NOT behind a staff-only permission (customers sign there); the API decides access", () => {
-  assert.doesNotMatch(guard, /"\/service-reports"/);
+test("the staff permission rule for /service-reports never reaches a customer (customers sign there); the API decides access", () => {
+  // Staff list: a route rule exists (menu + guard), but the customer branch of the guard runs and returns BEFORE the permission check.
+  assert.match(guard, /"\/service-reports": \[\.\.\.SERVICE_REPORT_LIST_PERMISSIONS\]/);
+  const customerBranch = guard.indexOf('user.role.key === "customer"');
+  const permissionCheck = guard.indexOf("const matched = matchRoute(pathname);");
+  assert.ok(customerBranch > 0 && permissionCheck > customerBranch, "customers are handled first");
 });
 
 // ---------------------------------------------------------------------------------------------------------
@@ -142,15 +146,14 @@ test("RECD unit page shows its AMC reports only inside the AMC section (which is
   assert.match(unitPage, /data-testid="unit-amc-reports"/);
 });
 
-test("page guard: a customer is NOT bounced off the report page (found in the browser walkthrough), but only that one page", () => {
+test("page guard: a customer is NOT bounced off the report pages (found in the browser walkthrough), but only those pages", () => {
   const guard = read("apps/admin-web/src/components/AuthGuard.tsx");
-  // the helper and its use in both the redirect effect and the render branch
-  assert.match(guard, /function isCustomerReportPath/);
+  // the helper (now in lib/routeAccess.ts, shared with its tests) and its use in both the redirect effect and the render branch
+  assert.match(guard, /from "@\/lib\/routeAccess"/);
   assert.match(guard, /pathname !== "\/customer\/portal" && !isCustomerReportPath\(pathname\)/);
   assert.match(guard, /isCustomerPortal \|\| isCustomerReportPath\(pathname\)/);
-  // the exact path rule: one report id, nothing broader
-  const rule = /^\/service-reports\/[^/]+$/;
-  assert.ok(rule.test("/service-reports/abc123"));
-  for (const other of ["/service-reports", "/service-reports/", "/service-reports/abc/extra", "/orders", "/users", "/complaints"]) assert.ok(!rule.test(other), other);
+  // the exact path rule: the report list (the portal's "Service reports & signing" link) or one report id, nothing broader
+  const access = read("apps/admin-web/src/lib/routeAccess.ts");
+  assert.match(access, /export function isCustomerReportPath/);
   assert.ok(guard.includes("service-reports"), "the guard names the report route");
 });

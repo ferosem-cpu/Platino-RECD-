@@ -7,6 +7,7 @@ import { NO_MOBILE_LABEL, mobileOrNone } from "@/lib/contactDisplay";
 import { apiErrorMessage } from "@/lib/apiError";
 import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
 import { useAuth } from "@/components/AuthContext";
+import { canOverrideDuplicatePo } from "@recd/shared";
 
 interface Lookup {
   id: string;
@@ -120,7 +121,8 @@ function fileToDataUrl(file: File): Promise<string> {
 export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  const canOverridePo = canOverrideDuplicatePo(user?.role.key);
   const canEdit = hasPermission("change_site_status");
   const canAssignVendor = hasPermission("manage_vendors");
   const canManageOrders = hasPermission("manage_orders");
@@ -186,6 +188,9 @@ export default function SiteDetailPage() {
   const [unitProductId, setUnitProductId] = useState("");
   const [unitQuantity, setUnitQuantity] = useState("1");
   const [unitMode, setUnitMode] = useState<"same_order" | "separate_order">("same_order");
+  // A separate (cloned) order is checked against the duplicate-PO rule like any new order: blank = the source order's PO.
+  const [clonePo, setClonePo] = useState("");
+  const [cloneAllowDuplicate, setCloneAllowDuplicate] = useState(false);
   const [addingUnit, setAddingUnit] = useState(false);
   const [removingLineItemId, setRemovingLineItemId] = useState<string | null>(null);
   const [unitSerials, setUnitSerials] = useState<string[]>([""]);
@@ -490,7 +495,13 @@ export default function SiteDetailPage() {
       } else {
         const newOrder = await api<{ orderNumber: string; site: { id: string } }>(`/sites/${id}/clone-order`, {
           method: "POST",
-          body: JSON.stringify({ productId: unitProductId, quantity, recdSerials }),
+          body: JSON.stringify({
+            productId: unitProductId,
+            quantity,
+            recdSerials,
+            poNumber: clonePo.trim() || undefined,
+            allowDuplicatePo: (canOverridePo && cloneAllowDuplicate) || undefined,
+          }),
         });
         router.push(`/sites/${newOrder.site.id}`);
       }
@@ -865,6 +876,24 @@ export default function SiteDetailPage() {
                 Create as a separate order
               </label>
             </div>
+            {unitMode === "separate_order" && (
+              <div className="space-y-2 text-sm" data-testid="clone-po-fields">
+                <input
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  placeholder={`PO number (blank = ${site.order.poNumber ?? "same as this order"})`}
+                  value={clonePo}
+                  onChange={(e) => setClonePo(e.target.value)}
+                  data-testid="clone-po-number"
+                />
+                <p className="text-xs text-gray-500">A PO already used by this customer is refused, as when creating any order.</p>
+                {canOverridePo && (
+                  <label className="flex items-center gap-2 text-xs text-gray-500">
+                    <input type="checkbox" data-testid="clone-allow-duplicate-po" checked={cloneAllowDuplicate} onChange={(e) => setCloneAllowDuplicate(e.target.checked)} />
+                    Allow a duplicate PO for this customer (the order is flagged)
+                  </label>
+                )}
+              </div>
+            )}
             <button type="submit" disabled={addingUnit || !unitProductId} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
               {addingUnit ? "Adding…" : "+ Add another unit"}
             </button>

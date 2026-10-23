@@ -283,8 +283,9 @@ describe("login OTP against the real test database", { skip }, () => {
     const u = await makeStaff("resend");
     const first = (await reqPhone(u.phone)).body.devCode as string;
     const blocked = await reqPhone(u.phone);
-    assert.equal(blocked.status, 429);
-    assert.match(blocked.body.error, /wait \d+s/);
+    // Answered like any other request (a distinct 429 would show which numbers belong to accounts), but nothing was created or sent.
+    assert.equal(blocked.status, 200);
+    assert.equal(blocked.body.devCode, undefined, "no new code");
     assert.equal((await activeCodes(u.user.id)).length, 1, "the blocked request created and voided nothing");
     await pastCooldown(u.user.id);
     const second = (await reqPhone(u.phone)).body.devCode as string;
@@ -301,8 +302,9 @@ describe("login OTP against the real test database", { skip }, () => {
     const other = await makeStaff("cap-other");
     for (let i = 0; i < 5; i++) { assert.equal((await reqPhone(u.phone)).status, 200, `request ${i + 1}`); await pastCooldown(u.user.id); }
     const limited = await reqPhone(u.phone);
-    assert.equal(limited.status, 429);
-    assert.match(limited.body.error, /Too many code requests/);
+    assert.equal(limited.status, 200, "answered like any request (no account oracle)");
+    assert.equal(limited.body.devCode, undefined, "but no sixth code");
+    assert.equal(await prisma.otpCode.count({ where: { userId: u.user.id } }), 5);
     assert.equal((await reqPhone(other.phone)).status, 200, "another user is independent");
     await prisma.otpCode.updateMany({ where: { userId: u.user.id }, data: { createdAt: new Date(Date.now() - 3_700_000) } });
     assert.equal((await reqPhone(u.phone)).status, 200, "allowed again after the hour");
@@ -406,11 +408,13 @@ describe("login OTP against the real test database", { skip }, () => {
     for (let round = 0; round < 3; round++) {
       const u = await makeStaff(`race-resend-${round}`);
       const results = await Promise.all(Array.from({ length: 6 }, () => reqPhone(u.phone)));
-      assert.ok(results.every((r) => r.status === 200 || r.status === 429), results.map((r) => r.status).join());
-      assert.ok(results.some((r) => r.status === 200));
+      assert.ok(results.every((r) => r.status === 200), results.map((r) => r.status).join());
+      // The cooldown check and the insert run under a database advisory lock: exactly ONE of the parallel requests issues a code.
+      assert.equal(results.filter((r) => r.body.devCode).length, 1, `round ${round}: exactly one request issued a code`);
+      assert.equal(await prisma.otpCode.count({ where: { userId: u.user.id } }), 1, `round ${round}: exactly one row was created`);
       assert.equal((await activeCodes(u.user.id)).length, 1, `round ${round}: exactly one live code`);
       let accepted = 0;
-      for (const r of results.filter((x) => x.status === 200)) if ((await verPhone(u.phone, r.body.devCode)).status === 200) accepted++;
+      for (const r of results.filter((x) => x.body.devCode)) if ((await verPhone(u.phone, r.body.devCode)).status === 200) accepted++;
       assert.equal(accepted, 1, `round ${round}: exactly one of the issued codes can sign in`);
     }
   });

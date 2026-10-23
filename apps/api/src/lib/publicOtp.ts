@@ -35,6 +35,24 @@ export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/**
+ * Delivery states of a PublicOtp row. A row is created "pending" and only becomes a usable code once the provider accepted it:
+ * "sent" (WhatsApp) or "skipped" (the explicit local-development echo, where the code is returned instead of sent).
+ * A "failed" or still "pending" row was never delivered, so it must neither be accepted nor hide an earlier delivered code.
+ */
+export const PUBLIC_OTP_DELIVERY = { PENDING: "pending", SENT: "sent", FAILED: "failed", SKIPPED: "skipped" } as const;
+export const PUBLIC_OTP_USABLE_DELIVERY: string[] = [PUBLIC_OTP_DELIVERY.SENT, PUBLIC_OTP_DELIVERY.SKIPPED];
+
+/** Database keys that serialise concurrent code requests for the same mobile / serial / address (see lib/advisoryLock.ts). */
+export const publicOtpLockKeys = (phone: string, serialNo: string, ip: string | null) => [
+  `public-otp:phone:${phone}`,
+  `public-otp:serial:${serialNo}`,
+  ...(ip ? [`public-otp:ip:${ip}`] : []),
+];
+
+/** Rows older than this are deleted (the request limits only look back one hour, a session lives 15 minutes). */
+export const PUBLIC_OTP_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 export interface OtpRowState {
   expiresAt: Date;
   attempts: number;

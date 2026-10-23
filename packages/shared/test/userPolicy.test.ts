@@ -119,3 +119,20 @@ test("password policy: the same minimum as sign-in", () => {
   assert.equal(passwordChangeSchema.safeParse({ currentPassword: "", newPassword: "12345678" }).success, false);
   assert.equal(passwordChangeSchema.safeParse({ newPassword: "12345678" }).success, false);
 });
+
+test("R10: an existing internal erection engineer (no vendor, role unchanged) can be edited; every other path to 'erection engineer without a vendor' is still refused", () => {
+  const internal = { vendorId: null as string | null, customerId: null as string | null };
+  // profile edit: nothing about the vendor is requested
+  const edit = plan({ fromRole: "erection_engineer", toRole: "erection_engineer", current: internal, requested: {} });
+  assert.deepEqual(ok(edit), { v: null, c: null, vc: false, cc: false });
+  // an explicit "no vendor" for someone who has none is also a no-op
+  assert.deepEqual(ok(plan({ fromRole: "erection_engineer", toRole: "erection_engineer", current: internal, requested: { vendorId: null } })), { v: null, c: null, vc: false, cc: false });
+  // still refused: creating, moving into the role, clearing an existing vendor
+  assert.equal(ok(plan({ fromRole: null, toRole: "erection_engineer", current: internal, requested: {} })), "An erection engineer must be assigned to a vendor");
+  assert.equal(ok(plan({ fromRole: "sales", toRole: "erection_engineer", current: internal, requested: {} })), "An erection engineer must be assigned to a vendor");
+  assert.equal(ok(plan({ fromRole: "erection_engineer", toRole: "erection_engineer", current: { vendorId: "v1", customerId: null }, requested: { vendorId: null } })), "An erection engineer must be assigned to a vendor");
+  // a vendor can be set on an internal engineer
+  assert.deepEqual(ok(plan({ fromRole: "erection_engineer", toRole: "erection_engineer", current: internal, requested: { vendorId: "v2" } })), { v: "v2", c: null, vc: true, cc: false });
+  // a vendor-linked engineer keeps theirs on a profile edit
+  assert.deepEqual(ok(plan({ fromRole: "erection_engineer", toRole: "erection_engineer", current: { vendorId: "v1", customerId: null }, requested: {} })), { v: "v1", c: null, vc: false, cc: false });
+});

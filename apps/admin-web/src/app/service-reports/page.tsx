@@ -8,6 +8,7 @@ import { api } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
 import { downloadReportPdf } from "@/lib/reportFiles";
 import { reportStatusPill } from "@/lib/serviceReportUi";
+import AllServiceReports from "./AllServiceReports";
 
 interface ReportRow {
   id: string;
@@ -306,10 +307,17 @@ function ReportsForTicketOrAmc() {
   );
 }
 
+/** With a ticket or AMC order in the address: the reports of that one record. Without: everything the signed-in user may see. */
+function ReportsEntry() {
+  const params = useSearchParams();
+  if (!params.get("complaintId") && !params.get("amcOrderId")) return <AllServiceReports />;
+  return <ReportsForTicketOrAmc />;
+}
+
 export default function ServiceReportsPage() {
   return (
     <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>
-      <ReportsForTicketOrAmc />
+      <ReportsEntry />
     </Suspense>
   );
 }

@@ -25,7 +25,7 @@ import { send as sendNotification } from "../services/notifications/notification
 import { asString, asOptionalString } from "../lib/params";
 import { findTakenSerials, takenSerialsMessage } from "../lib/serials";
 import { isSerialConflict, SERIAL_RACE_MESSAGE } from "../lib/uniqueViolations";
-import { OrderCreationError, withOrderNumber } from "../lib/orderCreation";
+import { OrderCreationError, resolveDuplicatePo, withOrderNumber } from "../lib/orderCreation";
 import { createDriveFolder, getDriveFolderId } from "../lib/googleDrive";
 import { managedRegionIds } from "../lib/regions";
 import { SITE_ORDER_WITH_REFS_SELECT, SITE_PEOPLE_INCLUDE, STAFF_REF_SELECT, VENDOR_REF_SELECT } from "../lib/safeSelect";
@@ -54,6 +54,8 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
       order: { select: { ...SITE_ORDER_WITH_REFS_SELECT, lineItems: { include: { product: true } } } },
       ...SITE_PEOPLE_INCLUDE,
       stageEvents: { orderBy: { createdAt: "desc" }, take: 1, include: { statusOption: true } },
+      // The serial(s) printed on this site's RECD(s), for list screens (mobile). Same rows the by-id endpoint returns, narrowed to what a list shows.
+      units: { select: { id: true, serialNo: true, status: true }, orderBy: { createdAt: "asc" } },
     },
     orderBy: { updatedAt: "desc" },
   });
@@ -170,21 +172,25 @@ sitesRouter.post("/:id/clone-order", requirePermission(PERMISSION_KEY.MANAGE_ORD
   // Order and units are created together so a serial conflict (a request racing us past the
   // check above) cannot leave an order behind with no units. A generated-order-number collision is
   // retried (bounded) in a fresh transaction.
-  // INTENDED EXCEPTION to the duplicate-PO policy: a sibling order for the same physical location is
-  // normally raised against the same PO, so the PO is copied from the source order WITHOUT the
-  // same-customer duplicate check and WITHOUT the duplicate flag (that applies to POST /orders only).
+  // The PO is the one the caller entered, else the source order's. It goes through the SAME duplicate rule as POST /orders (per customer,
+  // case-insensitive, under the customer + PO lock, inside this transaction): a duplicate is refused (409 DUPLICATE_PO) unless an
+  // administrator role passes allowDuplicatePo, in which case the clone is created and flagged poDuplicateFlag.
+  const poNumber = parsed.data.poNumber?.trim() || site.order.poNumber;
+  const poDate = parsed.data.poDate ? new Date(parsed.data.poDate) : parsed.data.poNumber ? undefined : site.order.poDate;
   let newOrder;
   try {
     newOrder = await withOrderNumber((orderNumber) =>
       prisma.$transaction(async (tx) => {
+        const poDuplicateFlag = await resolveDuplicatePo(tx, { customerId: site.order.customerId, poNumber, allowDuplicatePo: parsed.data.allowDuplicatePo, roleKey: req.auth!.roleKey });
         const created = await tx.order.create({
           data: {
             orderNumber,
             customerId: site.order.customerId,
             productId: parsed.data.productId,
             quantity: parsed.data.quantity,
-            poNumber: site.order.poNumber,
-            poDate: site.order.poDate,
+            poNumber,
+            poDate,
+            poDuplicateFlag,
             salesEngineerId: req.auth!.userId,
             site: {
               create: {
@@ -210,7 +216,7 @@ sitesRouter.post("/:id/clone-order", requirePermission(PERMISSION_KEY.MANAGE_ORD
       }),
     );
   } catch (err) {
-    if (err instanceof OrderCreationError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+    if (err instanceof OrderCreationError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}), ...(err.existingOrderNumber ? { existingOrderNumber: err.existingOrderNumber } : {}) });
     if (isSerialConflict(err)) return res.status(409).json({ error: SERIAL_RACE_MESSAGE });
     throw err;
   }

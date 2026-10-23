@@ -140,7 +140,7 @@ before(async () => {
   });
   define("complaint", {
     findMany: ({ include }: any) =>
-      shape([{ id: "t1", customerId: "cA", siteId: "sA", ticketNumber: "TCK-1", status: "open", reporterPhone: "9666666666", site: W.sites.sA, assignedTo: { id: "eng", name: "Vikram Singh" }, unit: { id: "uA", serialNo: "SER-A" } }], { include }),
+      shape([{ id: "t1", customerId: "cA", siteId: "sA", ticketNumber: "TCK-1", status: "open", reporterPhone: "9666666666", remarks: "internal staff remark", rootCause: "secret internal root cause", serviceReportUrl: "data:staff-only-report", slaEscalationLevel: 1, resolutionNotes: "internal resolution detail", assignedToId: "eng", site: W.sites.sA, assignedTo: { id: "eng", name: "Vikram Singh" }, unit: { id: "uA", serialNo: "SER-A" } }], { include }),
     count: () => 1,
   });
   define("siteContact", { findUnique: () => null });
@@ -198,6 +198,10 @@ test("customer: GET /sites and GET /sites/:id carry no password hash, token vers
   assert.equal(s.order.product.model, "RECD-250");
   assert.equal(s.currentStage.label, "Order received");
   assert.equal(s.address, "Plot A");
+  // The list now carries each site's RECD serial for the mobile list screens: only id / serial / status, only this customer's units.
+  assert.deepEqual(s.units.map((u: any) => u.serialNo), ["SER-A"]);
+  for (const u of s.units) assert.deepEqual(Object.keys(u).sort(), ["id", "serialNo", "status"].filter((k) => k in u).sort());
+  assert.ok(!list.text.includes("SER-B"), "another customer's serial is never in the list");
 
   const detail = await get("custA", "/sites/sA");
   assert.equal(detail.status, 200);
@@ -213,15 +217,22 @@ test("customer: GET /sites and GET /sites/:id carry no password hash, token vers
   for (const k of ["passwordHash", "tokenVersion", "notificationChannels", "contactEmail", "contactPhone", "salesOwnerId", "value"]) assert.equal(keys.has(k), false, `key ${k}`);
 });
 
-test("customer: tickets embed the order without its commercial value or sales-engineer id; the customer's own tickets keep working", async () => {
+test("customer: tickets embed the order without its commercial value or sales-engineer id, and carry NONE of the internal fields (assignee, remarks, root cause, SLA level) - the customer's own tickets still carry what they need", async () => {
   W = mkWorld();
   const r = await get("custA", "/complaints");
   assert.equal(r.status, 200);
-  assertNoLeak(r.text, [...FORBIDDEN_FOR_EXTERNAL, "850000", "salesEngineerId", "9666666666"], "customer GET /complaints");
+  assertNoLeak(r.text, [...FORBIDDEN_FOR_EXTERNAL, "850000", "salesEngineerId", "9666666666", "internal staff remark", "secret internal root cause", "staff-only-report", "internal resolution detail", "Vikram Singh"], "customer GET /complaints");
   assert.equal(r.json[0].ticketNumber, "TCK-1");
   assert.equal(r.json[0].site.order.orderNumber, "ORD-A");
   assert.equal(r.json[0].site.order.customer.name, "Customer A");
-  assert.equal(r.json[0].assignedTo.name, "Vikram Singh");
+  // R11.A: a customer never sees who it is assigned to, internal remarks / root cause, the staff report, or SLA / escalation progress.
+  assert.equal(r.json[0].assignedTo, undefined, "assignee details are internal");
+  assert.equal(r.json[0].assignedToId, undefined, "assignee id is internal");
+  assert.equal(r.json[0].remarks, undefined);
+  assert.equal(r.json[0].rootCause, undefined);
+  assert.equal(r.json[0].serviceReportUrl, undefined);
+  assert.equal(r.json[0].slaEscalationLevel, undefined);
+  assert.equal(r.json[0].resolutionNotes, undefined);
 });
 
 test("customer: pending actions are limited to their own sites and embed no commercial value", async () => {

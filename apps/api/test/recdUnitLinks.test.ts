@@ -83,7 +83,7 @@ before(async () => {
   const { agentConversationsRouter } = await import("../src/routes/agentConversations");
 
   // Swap every model delegate the routes touch for a stub that reads from `db`.
-  for (const model of ["user", "recdUnit", "complaint", "complaintEvent", "amcOrder", "amcOrderUnit", "site", "order", "regionManager", "stageDefinition", "orderLineItem", "customer", "product", "agentPendingAction", "agentConversation", "serviceReport", "companySettings"]) {
+  for (const model of ["user", "recdUnit", "complaint", "complaintEvent", "amcOrder", "amcOrderUnit", "site", "order", "regionManager", "stageDefinition", "orderLineItem", "customer", "product", "agentPendingAction", "agentConversation", "serviceReport", "companySettings", "recdUnitSerialHistory", "serviceReminder", "amcVisit", "warrantyHistory"]) {
     Object.defineProperty(prisma, model, {
       configurable: true,
       get: () => new Proxy({}, { get: (_t, fn: string) => (...a: any[]) => db[model]?.[fn]?.(...a) }),
@@ -173,7 +173,7 @@ test("PUT /recd-units/:id/serial turns a database uniqueness conflict into a cle
   const findUnique = db.recdUnit.findUnique;
   stubModel("recdUnit", {
     findUnique: (a: any) => (a.where.serialNo ? null : findUnique(a)),
-    update: () => { throw p2002("RecdUnit", "serialNo"); },
+    updateMany: () => { throw p2002("RecdUnit", "serialNo"); },
   });
   const r = await call("admin", "PUT", "/recd-units/uP/serial", { serialNo: "NEW-1" });
   assert.equal(r.status, 409);
@@ -555,7 +555,14 @@ test("legacy units without a serial stay manageable: list them, then give them a
   assert.equal((await call("admin", "GET", "/recd-units/uP/history")).status, 200, "history works without a serial");
 
   const findUnique = db.recdUnit.findUnique;
-  stubModel("recdUnit", { findUnique: (a: any) => (a.where.serialNo ? null : findUnique(a)), update: ({ where, data }: any) => ({ ...unitsById[where.id], ...data }) });
+  stubModel("recdUnit", {
+    findUnique: (a: any) => (a.where.serialNo ? null : findUnique(a)),
+    updateMany: ({ where, data }: any) => {
+      if (unitsById[where.id]?.serialNo !== where.serialNo) return { count: 0 }; // the real write is conditional on the unit still being serial-less
+      unitsById[where.id] = { ...unitsById[where.id], ...data };
+      return { count: 1 };
+    },
+  });
   const set = await call("admin", "PUT", "/recd-units/uP/serial", { serialNo: " legacy-7 " });
   assert.equal(set.status, 200);
   assert.equal(set.body.serialNo, "LEGACY-7");
@@ -1043,4 +1050,148 @@ test("AI rejection: an internal failure is also reported safely", async () => {
   assert.equal(result.status, 500);
   assert.equal(result.body.error, SAFE_ACTION_FAILED_MESSAGE);
   assert.doesNotMatch(JSON.stringify(result.body), /hunter2|constraint/i);
+});
+
+// ============================================================================================
+// R1 defects D1-D3 (route logic only - the database behaviour is proven in test/db/serialRules.db.test.ts)
+// ============================================================================================
+
+test("D1: PUT /recd-units/:id/serial loses cleanly when the unit got a serial between the read and the write", async () => {
+  reset();
+  unitsById.uP = { ...unitA1, id: "uP", serialNo: null };
+  const findUnique = db.recdUnit.findUnique;
+  // The read still sees a serial-less unit, but the conditional write matches nothing (another request won).
+  stubModel("recdUnit", {
+    findUnique: (a: any) => (a.where.serialNo ? null : findUnique(a)),
+    updateMany: () => ({ count: 0 }),
+    update: () => { throw new Error("must not be an unconditional write"); },
+  });
+  const r = await call("admin", "PUT", "/recd-units/uP/serial", { serialNo: "LATE-1" });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /already has a serial/);
+  const [arg] = called("recdUnit.updateMany")[0];
+  assert.deepEqual(arg.where, { id: "uP", serialNo: null }, "the write is conditioned on the serial still being empty");
+  delete unitsById.uP;
+});
+
+function stubCorrectionDb(opts: { updateCount?: number } = {}) {
+  reset();
+  unitsById.uC = { ...unitA1, id: "uC", serialNo: "OLD-1" };
+  const read = db.recdUnit.findUnique;
+  stubModel("recdUnit", {
+    findUnique: (a: any) => read(a),
+    updateMany: () => ({ count: opts.updateCount ?? 1 }),
+  });
+  stubModel("recdUnitSerialHistory", { create: ({ data }: any) => ({ id: "h1", ...data }) });
+}
+const correction = (as: string, body: unknown) => call(as, "PATCH", "/recd-units/uC/serial", body);
+
+test("D3: only an administrative role can correct a serial (manage_orders alone is not enough)", async () => {
+  stubCorrectionDb();
+  const body = { expectedSerialNo: "OLD-1", serialNo: "NEW-1", reason: "typo at entry" };
+  assert.equal((await correction("sales", body)).status, 403);
+  assert.equal((await correction("custA", body)).status, 403, "customers are refused");
+  assert.equal(called("recdUnit.updateMany").length, 0);
+  assert.equal(called("recdUnitSerialHistory.create").length, 0);
+  delete unitsById.uC;
+});
+
+test("D3: invalid input is a 400 and nothing is written", async () => {
+  stubCorrectionDb();
+  for (const body of [
+    {}, { expectedSerialNo: "OLD-1", serialNo: "NEW-1" }, { expectedSerialNo: "OLD-1", serialNo: "NEW-1", reason: "  x " },
+    { expectedSerialNo: "OLD-1", serialNo: "bad serial!", reason: "typo at entry" }, { expectedSerialNo: "OLD-1", serialNo: "  ", reason: "typo at entry" },
+    { expectedSerialNo: "OLD-1", serialNo: "old-1", reason: "same value, other case" },
+  ]) assert.equal((await correction("admin", body)).status, 400, JSON.stringify(body));
+  assert.equal(called("recdUnit.updateMany").length, 0);
+  delete unitsById.uC;
+});
+
+test("D3: a duplicate, a stale expected serial, a serial-less and a retired unit are refused with 409 and change nothing", async () => {
+  stubCorrectionDb();
+  const dup = await correction("admin", { expectedSerialNo: "OLD-1", serialNo: "sn-b1", reason: "typo at entry" });
+  assert.equal(dup.status, 409); assert.match(dup.body.error, /already registered: SN-B1/);
+  const stale = await correction("admin", { expectedSerialNo: "WRONG-0", serialNo: "NEW-1", reason: "typo at entry" });
+  assert.equal(stale.status, 409); assert.match(stale.body.error, /changed meanwhile/);
+  unitsById.uC.serialNo = null;
+  assert.equal((await correction("admin", { expectedSerialNo: "OLD-1", serialNo: "NEW-1", reason: "typo at entry" })).status, 409, "serial-less unit");
+  unitsById.uC.serialNo = "OLD-1"; unitsById.uC.status = RECD_UNIT_STATUS.RETIRED;
+  assert.equal((await correction("admin", { expectedSerialNo: "OLD-1", serialNo: "NEW-1", reason: "typo at entry" })).status, 409, "retired unit");
+  assert.equal((await call("admin", "PATCH", "/recd-units/nope/serial", { expectedSerialNo: "OLD-1", serialNo: "NEW-1", reason: "typo at entry" })).status, 404);
+  assert.equal(called("recdUnit.updateMany").length, 0);
+  assert.equal(called("recdUnitSerialHistory.create").length, 0);
+  delete unitsById.uC;
+});
+
+test("D3: an authorised correction is conditional on the current serial and records previous, new, reason and actor", async () => {
+  stubCorrectionDb();
+  const r = await correction("admin", { expectedSerialNo: "old-1", serialNo: " new-1 ", reason: " Typed the wrong digit at order entry " });
+  assert.equal(r.status, 200);
+  const [arg] = called("recdUnit.updateMany")[0];
+  assert.deepEqual(arg.where, { id: "uC", serialNo: "OLD-1", status: "active" });
+  assert.deepEqual(arg.data, { serialNo: "NEW-1" });
+  assert.deepEqual(called("recdUnitSerialHistory.create")[0][0].data, { unitId: "uC", previousSerialNo: "OLD-1", newSerialNo: "NEW-1", reason: "Typed the wrong digit at order entry", actorId: "admin" });
+  delete unitsById.uC;
+});
+
+test("D3: when the conditional write matches nothing (a concurrent correction won) the result is 409 and no history row is written", async () => {
+  stubCorrectionDb({ updateCount: 0 });
+  const r = await correction("admin", { expectedSerialNo: "OLD-1", serialNo: "NEW-1", reason: "typo at entry" });
+  assert.equal(r.status, 409);
+  assert.equal(called("recdUnitSerialHistory.create").length, 0);
+  delete unitsById.uC;
+});
+
+type History = { complaint?: number; report?: number; reminder?: number; visit?: number; amc?: number; warranty?: number; correction?: number };
+function stubLineItemDelete(history: History, txError?: unknown) {
+  reset();
+  stubModel("orderLineItem", {
+    findUnique: () => ({ id: "li1", orderId: "oA" }),
+    delete: () => { if (txError) throw txError; return {}; },
+  });
+  stubModel("amcOrderUnit", { count: () => history.amc ?? 0 });
+  stubModel("warrantyHistory", { count: () => history.warranty ?? 0 });
+  stubModel("complaint", { count: () => history.complaint ?? 0, findMany: () => [], findFirst: () => null });
+  stubModel("serviceReport", { count: () => history.report ?? 0, findMany: () => [] });
+  stubModel("serviceReminder", { count: () => history.reminder ?? 0 });
+  stubModel("amcVisit", { count: () => history.visit ?? 0 });
+  stubModel("recdUnitSerialHistory", { count: () => history.correction ?? 0 });
+  stubModel("recdUnit", { deleteMany: () => ({ count: 1 }) });
+}
+
+test("D2: removing an order line item is refused (409, nothing deleted) while its unit has tickets, reports, reminders, visits or a correction history", async () => {
+  const cases: [string, History, RegExp][] = [
+    ["ticket", { complaint: 1 }, /1 service ticket/], ["service report", { report: 2 }, /2 service report/], ["reminder", { reminder: 1 }, /service reminder/],
+    ["AMC visit", { visit: 1 }, /AMC visit/], ["serial correction", { correction: 1 }, /correction history/],
+  ];
+  for (const [name, history, text] of cases) {
+    stubLineItemDelete(history);
+    const r = await call("admin", "DELETE", "/orders/oA/line-items/li1");
+    assert.equal(r.status, 409, name);
+    assert.match(r.body.error, text, name);
+    assert.match(r.body.error, /kept as service history/, name);
+    assert.equal(called("recdUnit.deleteMany").length, 0, `${name}: the unit is not deleted`);
+    assert.equal(called("orderLineItem.delete").length, 0, `${name}: the line item is not deleted`);
+  }
+});
+
+test("D2: AMC and warranty protection keep their existing refusal, and a unit without history can still be removed", async () => {
+  stubLineItemDelete({ amc: 1 });
+  const amc = await call("admin", "DELETE", "/orders/oA/line-items/li1");
+  assert.equal(amc.status, 409); assert.match(amc.body.error, /covered by an AMC order/);
+  stubLineItemDelete({ warranty: 1 });
+  const w = await call("admin", "DELETE", "/orders/oA/line-items/li1");
+  assert.equal(w.status, 409); assert.match(w.body.error, /warranty history/);
+  stubLineItemDelete({});
+  const ok = await call("admin", "DELETE", "/orders/oA/line-items/li1");
+  assert.equal(ok.status, 204);
+  assert.equal(called("recdUnit.deleteMany").length, 1);
+});
+
+test("D2: a ticket attached between the check and the delete is stopped by the database (foreign-key RESTRICT) and reported as 409", async () => {
+  const fk = new Prisma.PrismaClientKnownRequestError("Foreign key constraint failed", { code: "P2003", clientVersion: "5.22.0", meta: { field_name: "Complaint_unitId_fkey" } });
+  stubLineItemDelete({}, fk);
+  const r = await call("admin", "DELETE", "/orders/oA/line-items/li1");
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /service history/);
 });

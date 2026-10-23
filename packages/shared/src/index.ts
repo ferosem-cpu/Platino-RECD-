@@ -11,3 +11,4 @@ export * from "./userPolicy";
 export * from "./ticketPolicy";
 export * from "./otpEligibility";
 export * from "./passwordChange";
+export * from "./contactDisplay";

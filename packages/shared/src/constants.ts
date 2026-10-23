@@ -72,6 +72,12 @@ export const PO_DUPLICATE_OVERRIDE_ROLE_KEYS: readonly string[] = [ROLE_KEY.SUPE
 export const canOverrideDuplicatePo = (roleKey: string | null | undefined): boolean =>
   !!roleKey && PO_DUPLICATE_OVERRIDE_ROLE_KEYS.includes(roleKey);
 
+/** Roles that may CORRECT a serial that was already set (a data-entry mistake). Same administrative tier as the duplicate-PO override;
+ * the business has not named another group, so no wider role is granted. Enforced by the API together with `manage_orders`. */
+export const SERIAL_CORRECTION_ROLE_KEYS: readonly string[] = [ROLE_KEY.SUPER_ADMIN, ROLE_KEY.OWNER_ADMIN, ROLE_KEY.MANAGEMENT];
+export const canCorrectSerial = (roleKey: string | null | undefined): boolean =>
+  !!roleKey && SERIAL_CORRECTION_ROLE_KEYS.includes(roleKey);
+
 export const PERMISSION_KEY = {
   VIEW_SITE_STATUS: "view_site_status",
   CHANGE_SITE_STATUS: "change_site_status",
@@ -335,6 +341,8 @@ export const COMPLAINT_EVENT = {
   NOTES_UPDATED: "notes_updated",
   /** The SLA escalation could not be delivered (no recipient, or every attempt failed): the level was NOT advanced and will be retried. */
   ESCALATION_FAILED: "escalation_failed",
+  /** Nobody could be told as intended when the ticket was raised (the site has no region / the region has no Regional Manager / no recipient at all). */
+  NOTIFICATION_GAP: "notification_gap",
   /** The ticket was archived (removed from working views, nothing deleted). The event records who, when and the optional reason. */
   ARCHIVED: "archived",
   /** An archived ticket was restored to the working views (who, when, the optional reason, the status it came back in). */

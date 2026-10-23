@@ -20,6 +20,7 @@ import { LOGIN_OTP_POLICY, normalizeIndianMobile, type LoginOtpPurpose } from "@
 import { prisma } from "./prisma";
 import { devEchoAllowed, getOtpDelivery } from "./otpDelivery";
 import { otpHmacSecret } from "./otpSecret";
+import { lockKeys } from "./advisoryLock";
 
 export const LOGIN_OTP = {
   /** 6 digits, never a leading zero (format the flows always had). */
@@ -61,56 +62,64 @@ export type IssueResult =
  */
 export async function issueLoginOtp(args: { userId: string; purpose: LoginOtpPurpose; destination: string }): Promise<IssueResult> {
   const { userId, purpose, destination } = args;
-  const now = Date.now();
-  const hourAgo = new Date(now - HOUR_MS);
-  const cooldownMs = LOGIN_OTP_POLICY.RESEND_COOLDOWN_SECONDS * 1000;
+  // Check, void and insert are ONE decision: without the lock, parallel requests all pass the cooldown / hourly checks
+  // (nothing is committed yet when they read), and each then voids the previous request's code and issues its own.
+  return prisma.$transaction(
+    async (tx): Promise<IssueResult> => {
+      await lockKeys(tx, [`login-otp:${userId}:${purpose}`]);
+      const now = Date.now();
+      const hourAgo = new Date(now - HOUR_MS);
+      const cooldownMs = LOGIN_OTP_POLICY.RESEND_COOLDOWN_SECONDS * 1000;
 
-  const [requestsLastHour, lastDelivered] = await Promise.all([
-    prisma.otpCode.count({ where: { userId, purpose, createdAt: { gte: hourAgo } } }),
-    // A request whose delivery failed does not hold the user back from trying again.
-    prisma.otpCode.findFirst({
-      where: { userId, purpose, deliveryStatus: { not: "failed" } },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    }),
-  ]);
+      const [requestsLastHour, lastDelivered] = await Promise.all([
+        tx.otpCode.count({ where: { userId, purpose, createdAt: { gte: hourAgo } } }),
+        // A request whose delivery failed does not hold the user back from trying again.
+        tx.otpCode.findFirst({
+          where: { userId, purpose, deliveryStatus: { not: "failed" } },
+          orderBy: { createdAt: "desc" },
+          select: { createdAt: true },
+        }),
+      ]);
 
-  if (lastDelivered && now - lastDelivered.createdAt.getTime() < cooldownMs) {
-    return { ok: false, reason: "cooldown", retryAfterSeconds: Math.ceil((cooldownMs - (now - lastDelivered.createdAt.getTime())) / 1000) };
-  }
-  if (requestsLastHour >= LOGIN_OTP_POLICY.MAX_REQUESTS_PER_HOUR) {
-    const oldest = await prisma.otpCode.findFirst({
-      where: { userId, purpose, createdAt: { gte: hourAgo } },
-      orderBy: { createdAt: "asc" },
-      select: { createdAt: true },
-    });
-    const wait = oldest ? Math.ceil((oldest.createdAt.getTime() + HOUR_MS - now) / 1000) : 3600;
-    return { ok: false, reason: "limit", retryAfterSeconds: Math.max(1, wait) };
-  }
+      if (lastDelivered && now - lastDelivered.createdAt.getTime() < cooldownMs) {
+        return { ok: false, reason: "cooldown", retryAfterSeconds: Math.ceil((cooldownMs - (now - lastDelivered.createdAt.getTime())) / 1000) };
+      }
+      if (requestsLastHour >= LOGIN_OTP_POLICY.MAX_REQUESTS_PER_HOUR) {
+        const oldest = await tx.otpCode.findFirst({
+          where: { userId, purpose, createdAt: { gte: hourAgo } },
+          orderBy: { createdAt: "asc" },
+          select: { createdAt: true },
+        });
+        const wait = oldest ? Math.ceil((oldest.createdAt.getTime() + HOUR_MS - now) / 1000) : 3600;
+        return { ok: false, reason: "limit", retryAfterSeconds: Math.max(1, wait) };
+      }
 
-  await prisma.otpCode.updateMany({ where: { userId, purpose, consumedAt: null }, data: { consumedAt: new Date(now) } });
+      await tx.otpCode.updateMany({ where: { userId, purpose, consumedAt: null }, data: { consumedAt: new Date(now) } });
 
-  const id = randomUUID();
-  const code = generateLoginOtpCode();
-  try {
-    await prisma.otpCode.create({
-      data: {
-        id,
-        userId,
-        purpose,
-        destination,
-        code: hashLoginOtp(id, userId, code),
-        expiresAt: new Date(now + LOGIN_OTP.TTL_MS),
-      },
-    });
-  } catch (err) {
-    // A simultaneous request created the live code first (partial unique index): treat it as the cooldown.
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return { ok: false, reason: "cooldown", retryAfterSeconds: LOGIN_OTP_POLICY.RESEND_COOLDOWN_SECONDS };
-    }
-    throw err;
-  }
-  return { ok: true, id, code };
+      const id = randomUUID();
+      const code = generateLoginOtpCode();
+      try {
+        await tx.otpCode.create({
+          data: {
+            id,
+            userId,
+            purpose,
+            destination,
+            code: hashLoginOtp(id, userId, code),
+            expiresAt: new Date(now + LOGIN_OTP.TTL_MS),
+          },
+        });
+      } catch (err) {
+        // Defence in depth behind the lock: the partial unique index (one live code per user and purpose) still refuses a second one.
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+          return { ok: false, reason: "cooldown", retryAfterSeconds: LOGIN_OTP_POLICY.RESEND_COOLDOWN_SECONDS };
+        }
+        throw err;
+      }
+      return { ok: true, id, code };
+    },
+    { timeout: 15_000 },
+  );
 }
 
 /** Voids a code that could not be delivered, so an undelivered code can never be used. */
@@ -142,7 +151,8 @@ export async function consumeLoginOtp(args: { userId: string; purpose: LoginOtpP
   if ((recent._sum.attempts ?? 0) >= LOGIN_OTP_POLICY.MAX_FAILED_PER_HOUR) return false;
 
   const row = await prisma.otpCode.findFirst({
-    where: { userId, purpose, destination, consumedAt: null, expiresAt: { gt: now } },
+    // "failed" rows are voided when delivery fails; excluding them here as well keeps an undelivered code unusable even if that void was lost.
+    where: { userId, purpose, destination, consumedAt: null, deliveryStatus: { not: "failed" }, expiresAt: { gt: now } },
     orderBy: { createdAt: "desc" },
   });
   if (!row) return false;
@@ -191,6 +201,17 @@ export async function deliverLoginOtp(registeredPhone: string | null | undefined
   }
 }
 
+/** Retention: a code row (hash + destination number) is useless after its life and the one-hour limit windows; drop old ones now and then. */
+const LOGIN_OTP_RETENTION_MS = 24 * 60 * 60 * 1000;
+function purgeOldLoginOtps(): void {
+  if (randomInt(0, 50) !== 0) return; // about one request in fifty
+  try {
+    prisma.otpCode.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - LOGIN_OTP_RETENTION_MS) } } }).catch(() => undefined);
+  } catch {
+    /* best effort */
+  }
+}
+
 export type LoginOtpRequestOutcome =
   | { kind: "sent"; devCode?: string }
   | { kind: "throttled"; reason: "cooldown" | "limit"; retryAfterSeconds: number }
@@ -210,6 +231,7 @@ export async function requestLoginOtp(args: { userId: string; purpose: LoginOtpP
   const issued = await issueLoginOtp({ userId: args.userId, purpose: args.purpose, destination });
   if (!issued.ok) return { kind: "throttled", reason: issued.reason, retryAfterSeconds: issued.retryAfterSeconds };
 
+  purgeOldLoginOtps();
   const { delivered, provider } = await deliverLoginOtp(destination, issued.code);
   if (!delivered) {
     await voidLoginOtp(issued.id);

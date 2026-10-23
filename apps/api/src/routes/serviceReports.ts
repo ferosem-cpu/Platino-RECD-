@@ -223,11 +223,125 @@ const staleVersion = (res: Response) =>
 // List / read
 // ---------------------------------------------------------------------------
 
+/**
+ * Which reports a STAFF user may list, as a Prisma filter - the same rules as staffAccess / amcStaffAccess, expressed once for a whole list:
+ *  - ticket reports: MANAGE_COMPLAINTS or VIEW_COMPLAINTS_OVERVIEW see every ticket's reports; ACT_ASSIGNED_COMPLAINTS only those of tickets
+ *    assigned to them; a vendor user only their vendor's sites; a Regional Manager only their mapped regions (a ticket without a site is out of
+ *    every region and out of every vendor).
+ *  - AMC reports: MANAGE_AMC_ORDERS, narrowed by the report's site for vendor and regional users in the same way.
+ * Returns null when the user may list nothing. Customers never get here (they use /mine or a ticket / AMC order they own).
+ */
+async function staffListScope(req: AuthenticatedRequest): Promise<Prisma.ServiceReportWhereInput | null> {
+  const a = req.auth!;
+  if (a.customerId) return null;
+  const regions = a.roleKey === ROLE_KEY.REGIONAL_MANAGER ? await managedRegionIds(a.userId, a.roleKey) : null;
+  const siteScope = (): Prisma.SiteWhereInput => ({
+    ...(a.vendorId ? { vendorId: a.vendorId } : {}),
+    ...(regions ? { regionId: { in: regions } } : {}),
+  });
+  const scoped = !!a.vendorId || !!regions;
+
+  const clauses: Prisma.ServiceReportWhereInput[] = [];
+  const seesAllTickets = a.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) || a.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW);
+  const seesAssigned = a.permissions.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS);
+  if (seesAllTickets || seesAssigned) {
+    clauses.push({
+      kind: SERVICE_REPORT_KIND.TICKET,
+      complaint: {
+        ...(seesAllTickets ? {} : { assignedToId: a.userId }),
+        ...(scoped ? { site: siteScope() } : {}),
+      },
+    });
+  }
+  if (a.permissions.has(PERMISSION_KEY.MANAGE_AMC_ORDERS)) {
+    clauses.push({ kind: SERVICE_REPORT_KIND.AMC, ...(scoped ? { site: siteScope() } : {}) });
+  }
+  return clauses.length ? { OR: clauses } : null;
+}
+
+const LIST_DEFAULT_LIMIT = 50;
+const LIST_MAX_LIMIT = 100;
+
+const listInclude = {
+  ...reportInclude,
+  customer: { select: { id: true, name: true } },
+  site: { select: { id: true, regionId: true, vendorId: true, companyName: true } },
+  unit: { select: { id: true, serialNo: true } },
+} as const;
+
+/**
+ * Staff list of service reports across tickets and AMC orders, narrowed by the caller's own scope (staffListScope) AND the optional filters
+ * status, kind, customerId, siteId, unitId and a free-text q (report number, ticket number, serial, customer, site). A filter can only ever
+ * narrow what the caller may already see.
+ */
+async function listForStaff(req: AuthenticatedRequest, res: Response) {
+  const scope = await staffListScope(req);
+  if (!scope) return res.status(403).json({ error: "Forbidden" });
+
+  const status = asOptionalString(req.query.status);
+  const kind = asOptionalString(req.query.kind);
+  if (status && !Object.values(SERVICE_REPORT_STATUS).includes(status as never)) return res.status(400).json({ error: "Unknown status" });
+  if (kind && !Object.values(SERVICE_REPORT_KIND).includes(kind as never)) return res.status(400).json({ error: "Unknown kind" });
+  const customerId = asOptionalString(req.query.customerId);
+  const siteId = asOptionalString(req.query.siteId);
+  const unitId = asOptionalString(req.query.unitId);
+  const q = asOptionalString(req.query.q)?.trim().slice(0, 100);
+  const limit = Math.min(Math.max(parseInt(asOptionalString(req.query.limit) ?? "", 10) || LIST_DEFAULT_LIMIT, 1), LIST_MAX_LIMIT);
+  const offset = Math.max(parseInt(asOptionalString(req.query.offset) ?? "", 10) || 0, 0);
+
+  const contains = (v: string) => ({ contains: v, mode: "insensitive" as const });
+  const where: Prisma.ServiceReportWhereInput = {
+    AND: [
+      scope,
+      ...(status ? [{ status }] : []),
+      ...(kind ? [{ kind }] : []),
+      ...(customerId ? [{ customerId }] : []),
+      ...(siteId ? [{ siteId }] : []),
+      ...(unitId ? [{ unitId }] : []),
+      ...(q
+        ? [
+            {
+              OR: [
+                { reportNumber: contains(q) },
+                { unitSerialNo: contains(q) },
+                { unit: { serialNo: contains(q) } },
+                { complaint: { ticketNumber: contains(q) } },
+                { customer: { name: contains(q) } },
+                { site: { companyName: contains(q) } },
+              ],
+            },
+          ]
+        : []),
+    ],
+  };
+
+  const [total, rows] = await Promise.all([
+    prisma.serviceReport.count({ where }),
+    prisma.serviceReport.findMany({ where, include: listInclude, orderBy: [{ createdAt: "desc" }, { id: "asc" }], take: limit, skip: offset }),
+  ]);
+  res.json({
+    total,
+    limit,
+    offset,
+    reports: rows.map((r) => ({
+      ...toApi(r as unknown as ReportRow),
+      customerName: r.customer.name,
+      siteName: r.site?.companyName ?? null,
+      // An AMC report prints its own snapshot; a ticket report has none, so the unit's current serial is shown.
+      unitSerial: r.unitSerialNo ?? r.unit?.serialNo ?? null,
+    })),
+  });
+}
+
 serviceReportsRouter.get("/", async (req: AuthenticatedRequest, res) => {
   const complaintId = asOptionalString(req.query.complaintId);
   const amcOrderId = asOptionalString(req.query.amcOrderId);
   if (complaintId && amcOrderId) return res.status(400).json({ error: "Ask for the reports of a ticket OR of an AMC order, not both" });
-  if (!complaintId && !amcOrderId) return res.status(400).json({ error: "complaintId or amcOrderId is required" });
+  if (!complaintId && !amcOrderId) {
+    // No ticket / AMC order named: staff get their scoped list; a customer must name one of their own (or use /mine).
+    if (req.auth!.customerId) return res.status(400).json({ error: "complaintId or amcOrderId is required" });
+    return listForStaff(req, res);
+  }
 
   if (amcOrderId) {
     const amc = await prisma.amcOrder.findUnique({
@@ -281,10 +395,11 @@ serviceReportsRouter.get("/mine", async (req: AuthenticatedRequest, res) => {
   if (!customerId) return res.status(403).json({ error: "Forbidden" });
   const reports = await prisma.serviceReport.findMany({
     where: { customerId, status: { not: SERVICE_REPORT_STATUS.DRAFT } },
-    include: reportInclude,
+    include: { ...reportInclude, unit: { select: { serialNo: true } } },
     orderBy: { createdAt: "desc" },
   });
-  res.json({ reports: reports.map(toApi) });
+  // unitSerial: an AMC report prints its own snapshot; a ticket report has none, so the unit's current serial is shown (the customer's own unit).
+  res.json({ reports: reports.map((r) => ({ ...toApi(r as unknown as ReportRow), unitSerial: r.unitSerialNo ?? r.unit?.serialNo ?? null })) });
 });
 
 serviceReportsRouter.get("/:id", async (req: AuthenticatedRequest, res) => {

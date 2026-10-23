@@ -33,6 +33,14 @@ export function rowActionsFor(actor: { id: string; roleKey: string } | null, row
 /** Does this role need a vendor to be chosen? */
 export const roleNeedsVendor = (roleKey: string): boolean => VENDOR_REQUIRED_ROLES.includes(roleKey);
 
+/**
+ * Must the Vendor box be filled in the EDIT dialog? Yes when the person is being moved into a vendor-scoped role or already has a vendor (it
+ * may be changed, not left empty). No for an existing internal erection engineer with no vendor whose role is unchanged: a name or phone edit must
+ * not force a vendor on them (the server applies the same rule - planAssociations).
+ */
+export const vendorRequiredOnEdit = (current: { roleKey: string; vendorId?: string | null }, formRoleKey: string): boolean =>
+  roleNeedsVendor(formRoleKey) && (formRoleKey !== current.roleKey || !!current.vendorId);
+
 /** Message for a failed administrative request: the server's own wording for refusals (it never contains secrets), a short lead for sign-in problems. */
 export function userAdminErrorMessage(err: unknown, fallback: string): string {
   const status = (err as { status?: unknown } | null)?.status;

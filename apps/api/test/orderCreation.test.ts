@@ -350,16 +350,56 @@ test("AI confirmation: unknown customer or product ids are 400s, not foreign-key
 });
 
 // --- 9: clone-order -------------------------------------------------------------------------------------------------------
-test("clone-order intentionally reuses the source PO: no duplicate check, no flag", async () => {
+test("R9: clone-order applies the SAME duplicate-PO rule - the copied source PO is refused (409 DUPLICATE_PO), nothing is created", async () => {
   seedOrder("cA", "PO-CLONE"); // the source order already carries this PO
+  const before = store.orders.length;
   const r = await call("sales", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: ["CLONE-1"] });
-  assert.equal(r.status, 201);
-  assert.equal(r.body.poNumber, "PO-CLONE");
-  assert.notEqual(r.body.poDuplicateFlag, true, "a sibling order is not flagged");
-  assert.equal(store.orderFindFirstCalls, 0, "the duplicate-PO lookup is never run for clone-order");
-  assert.equal(store.orders.filter((o) => o.poNumber === "PO-CLONE").length, 2);
-  // ...while a normal order with that PO is still a duplicate afterwards
-  assert.equal((await call("sales", "POST", "/orders", newBody({ poNumber: "PO-CLONE" }))).status, 409);
+  assert.deepEqual([r.status, r.body.code], [409, "DUPLICATE_PO"]);
+  assert.match(r.body.error, /PO-CLONE already exists for this customer/);
+  assert.equal(store.orders.length, before, "no order");
+  assert.equal(store.units.length, 0, "no unit");
+  assert.ok(store.orderFindFirstCalls >= 1, "the same duplicate lookup ran");
+});
+
+test("R9: clone-order with a NEW unique PO is created, unflagged; another customer's identical PO is not a duplicate", async () => {
+  seedOrder("cA", "PO-CLONE");
+  seedOrder("cB", "PO-OTHER"); // a different customer's PO
+  const ok = await call("sales", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: ["CLONE-2"], poNumber: "  PO-NEW-1 " });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  assert.equal(ok.body.poNumber, "PO-NEW-1", "trimmed");
+  assert.notEqual(ok.body.poDuplicateFlag, true);
+  // PO-OTHER belongs to customer B only: cloning a customer-A site with it is allowed
+  const other = await call("sales", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: ["CLONE-3"], poNumber: "po-other" });
+  assert.equal(other.status, 201, JSON.stringify(other.body));
+  assert.notEqual(other.body.poDuplicateFlag, true);
+});
+
+test("R9: clone-order duplicate checks are case-insensitive and padded-insensitive, for the entered PO too", async () => {
+  seedOrder("cA", "PO-CLONE");
+  for (const poNumber of ["po-clone", "  PO-Clone  "]) {
+    const r = await call("sales", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: ["CLONE-4"], poNumber });
+    assert.deepEqual([r.status, r.body.code], [409, "DUPLICATE_PO"], poNumber);
+  }
+});
+
+test("R9: clone-order override - only an administrator role who ticks it; the order is flagged (the audit trail); a non-admin's flag is ignored", async () => {
+  seedOrder("cA", "PO-CLONE");
+  const sales = await call("sales", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: ["CLONE-5"], allowDuplicatePo: true });
+  assert.deepEqual([sales.status, sales.body.code], [409, "DUPLICATE_PO"], "sales cannot override");
+  const notTicked = await call("admin", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: ["CLONE-6"] });
+  assert.equal(notTicked.status, 409, "an administrator must tick it too");
+  const ok = await call("admin", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: ["CLONE-7"], allowDuplicatePo: true });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  assert.equal(ok.body.poDuplicateFlag, true);
+  assert.equal(ok.body.poNumber, "PO-CLONE");
+});
+
+test("R9: simultaneous clone-orders with the same PO create exactly one (the lock serialises them)", async () => {
+  seedOrder("cA", "PO-SRC");
+  const rs = await Promise.all([1, 2, 3, 4].map((n) => call("sales", "POST", "/sites/sA/clone-order", { productId: "p1", quantity: 1, recdSerials: [`RACE-C${n}`], poNumber: "PO-RACE" })));
+  assert.equal(rs.filter((r) => r.status === 201).length, 1, rs.map((r) => r.status).join());
+  assert.equal(rs.filter((r) => r.status === 409 && r.body.code === "DUPLICATE_PO").length, 3);
+  assert.equal(store.orders.filter((o) => o.poNumber === "PO-RACE").length, 1);
 });
 
 // --- 10: references ---------------------------------------------------------------------------------------------------------

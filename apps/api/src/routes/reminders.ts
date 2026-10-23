@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   ACKNOWLEDGEABLE_REMINDER_STATUS,
+  UNDELIVERED_REMINDER_STATUSES,
   COMPLAINT_EVENT,
   PERMISSION_KEY,
   REMINDER_EVENT,
@@ -89,21 +90,26 @@ remindersRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVI
 remindersRouter.post("/:id/acknowledge", requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS), async (req: AuthenticatedRequest, res) => {
   if (req.auth!.customerId || req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
   const id = asString(req.params.id);
-  const reminder = await prisma.serviceReminder.findUnique({ where: { id }, select: { id: true, regionId: true, status: true, acknowledgedAt: true } });
+  const reminder = await prisma.serviceReminder.findUnique({ where: { id }, select: { id: true, regionId: true, status: true, acknowledgedAt: true, escalationLevel: true } });
   if (!reminder) return res.status(404).json({ error: "Reminder not found" });
   const scope = await reminderScope(req.auth!.userId, req.auth!.roleKey);
   if (!inScope(scope, reminder.regionId)) return res.status(403).json({ error: "This reminder is outside your regions" });
   if (reminder.status === REMINDER_STATUS.CLOSED) return res.status(409).json({ error: "This activity is already finished, so the reminder is closed.", code: "REMINDER_CLOSED" });
   if (reminder.acknowledgedAt) return res.status(409).json({ error: "This reminder was already acknowledged.", code: "ALREADY_ACKNOWLEDGED" });
   // Only a reminder that was actually delivered can be acknowledged: not one that is waiting, failed (fully or partly) or has no recipient.
-  if (reminder.status !== ACKNOWLEDGEABLE_REMINDER_STATUS) {
+  // The exception: an undelivered one that an escalation has since put in front of somebody (they must be able to take it over).
+  const escalatedAndUndelivered = UNDELIVERED_REMINDER_STATUSES.includes(reminder.status) && reminder.escalationLevel >= 1;
+  if (reminder.status !== ACKNOWLEDGEABLE_REMINDER_STATUS && !escalatedAndUndelivered) {
     return res.status(409).json({ error: "This reminder has not been delivered yet, so it cannot be acknowledged.", code: "REMINDER_NOT_DELIVERED" });
   }
 
   // Conditional claim (still requiring "delivered"): two people acknowledging at once record exactly one acknowledgement.
   const now = new Date();
   const claimed = await prisma.serviceReminder.updateMany({
-    where: { id, acknowledgedAt: null, status: ACKNOWLEDGEABLE_REMINDER_STATUS },
+    where: {
+      id, acknowledgedAt: null,
+      OR: [{ status: ACKNOWLEDGEABLE_REMINDER_STATUS }, { status: { in: UNDELIVERED_REMINDER_STATUSES }, escalationLevel: { gte: 1 } }],
+    },
     data: { acknowledgedAt: now, acknowledgedById: req.auth!.userId, status: REMINDER_STATUS.ACKNOWLEDGED },
   });
   if (claimed.count !== 1) return res.status(409).json({ error: "This reminder was already acknowledged.", code: "ALREADY_ACKNOWLEDGED" });

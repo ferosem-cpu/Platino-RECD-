@@ -45,6 +45,7 @@ import {
   AMC_VISIT_STATUS,
   classifyDue,
   escalationDue,
+  ESCALATABLE_REMINDER_STATUSES,
   reminderEligible,
   type DueState,
 } from "@recd/shared";
@@ -330,7 +331,8 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
   // 4. Escalate unacknowledged reminders (only when an escalation time has been approved). escalationLevel advances only once
   //    the level was DELIVERED (or had nobody to tell); a failed level stays due and is retried (up to MAX_DELIVERY_ATTEMPTS).
   if (escalationHours != null) {
-    const sent = await prisma.serviceReminder.findMany({ where: { status: REMINDER_STATUS.SENT, acknowledgedAt: null, escalationLevel: { lt: 2 }, closedAt: null } });
+    // Delivered reminders AND undelivered ones (failed / no recipient): a failed delivery must not stop an overdue activity from being escalated.
+    const sent = await prisma.serviceReminder.findMany({ where: { status: { in: ESCALATABLE_REMINDER_STATUSES }, acknowledgedAt: null, escalationLevel: { lt: 2 }, closedAt: null } });
     for (const r of sent) {
       if (!escalationDue(r, escalationHours, now)) continue;
       if ((r.escalationAttempts ?? 0) >= MAX_DELIVERY_ATTEMPTS) continue;
@@ -338,7 +340,7 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
       // Lease the attempt: a parallel run that got here first leaves count 0 (its lease is fresh), so only one run delivers.
       const claimed = await prisma.serviceReminder.updateMany({
         where: {
-          id: r.id, status: REMINDER_STATUS.SENT, acknowledgedAt: null, closedAt: null, escalationLevel: r.escalationLevel,
+          id: r.id, status: { in: ESCALATABLE_REMINDER_STATUSES }, acknowledgedAt: null, closedAt: null, escalationLevel: r.escalationLevel,
           OR: [{ escalationClaimedAt: null }, { escalationClaimedAt: { lt: stale } }],
         },
         data: { escalationClaimedAt: now, escalationAttempts: { increment: 1 } },
