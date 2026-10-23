@@ -346,6 +346,16 @@ test("history/detail respect vendor and regional-manager scoping", async () => {
   assert.equal((await call("rmNorth", "GET", "/recd-units/uB1/history")).status, 403, "other region");
 });
 
+test("GET /recd-units/:id: a vendor reads a unit at their own site and gets 403 for another vendor's unit", async () => {
+  reset();
+  const own = await call("vendor1", "GET", "/recd-units/uA1");
+  assert.equal(own.status, 200, "vendor's own unit");
+  assert.equal(own.body.serialNo, "SN-A1");
+  const other = await call("vendor1", "GET", "/recd-units/uB1");
+  assert.equal(other.status, 403, "another vendor's unit");
+  assert.equal(other.body.serialNo, undefined, "nothing about the unit is returned");
+});
+
 test("GET /recd-units list is scoped for customers and regional managers", async () => {
   reset();
   await call("custA", "GET", "/recd-units");
