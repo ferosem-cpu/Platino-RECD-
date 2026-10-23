@@ -817,6 +817,38 @@ describe("ticket management against the real test database", { skip }, () => {
     assert.ok(mailsFor(t, "complaint_escalated").some((m) => m.recipientId === w.mgmt.id));
   });
 
+  test("a stuck level 1 does not block level 2: Management is still told, the failure stays visible, and the jump lists the skipped level", async () => {
+    const { t } = await makeTicket({ createdAt: aged(60) }, { regionId: w.RN.id });
+    emailFail.add(w.rmN.id); // the Regional Manager's e-mail is refused (no provider / bad address)
+    sent.length = 0;
+    try {
+      const r = await esc.runTicketEscalation(new Date());
+      assert.ok(r.deferred >= 1 && r.escalatedToManagement >= 1);
+      assert.ok(mailsFor(t, "complaint_escalated").some((m) => m.recipientId === w.mgmt.id), "Management was notified");
+      assert.ok(!mailsFor(t, "complaint_escalated").some((m) => m.recipientId === w.rmN.id), "the refused e-mail was never accepted");
+      assert.equal(await levelOf(t), 2);
+      const failed = await events(t.id, "escalation_failed");
+      assert.deepEqual([failed.length, failed[0].detail.reason, failed[0].toValue], [1, "delivery_failed", "1"], "level 1's failure is recorded");
+      const ev = await events(t.id, "escalated");
+      assert.deepEqual([ev.length, ev[0].fromValue, ev[0].toValue, ev[0].detail.audience, ev[0].detail.skippedLevels], [1, "0", "2", "management", [1]]);
+    } finally {
+      emailFail.delete(w.rmN.id);
+    }
+  });
+
+  test("a stuck level 1 on a ticket that has only earned level 1 is unchanged: it stays at 0 and is retried", async () => {
+    const { t } = await makeTicket({ createdAt: aged(30) }, { regionId: w.RN.id });
+    emailFail.add(w.rmN.id);
+    sent.length = 0;
+    try {
+      await esc.runTicketEscalation(new Date());
+      assert.equal(await levelOf(t), 0);
+      assert.equal(mailsFor(t, "complaint_escalated").length, 0, "Management is not told before 48 h");
+    } finally {
+      emailFail.delete(w.rmN.id);
+    }
+  });
+
   test("a reopened ticket keeps its escalation level and is not re-escalated for the same level (the clock still runs from creation)", async () => {
     const { t } = await makeTicket({ createdAt: aged(30) }, { regionId: w.RN.id });
     await esc.runTicketEscalation(new Date());

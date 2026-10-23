@@ -13,6 +13,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { Prisma } from "@prisma/client";
 import { ROLE_KEY, PERMISSION_KEY, RECD_UNIT_STATUS } from "@recd/shared";
+import { shape } from "./helpers/prismaShape";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -402,6 +403,58 @@ test("history: customers get their tickets and AMC but never the internal ticket
   assert.deepEqual(r.body.complaints[0].events, []);
   assert.equal(called("complaint.findMany")[0][0].select.events, undefined, "events are not even queried");
   assert.equal(r.body.amcOrders.length, 1);
+});
+
+// A full staff row as the database holds it. The stub applies the route's `select` the way Prisma would, so a field the route does not ask for
+// can never reach the response - and one it does ask for (the old behaviour) fails the assertions below.
+const INTERNAL = { rootCause: "SECRET-ROOT-CAUSE", resolutionNotes: "SECRET-RESOLUTION", remarks: "SECRET-REMARK", serviceReportUrl: "data:application/pdf;base64,SECRETPDF" };
+const fullTicket = {
+  id: "t1", ticketNumber: "TCK-1", customerId: "cA", siteId: "sA", unitId: "uA1", category: "breakdown", issueCategory: "engine", description: "Will not start",
+  severity: "high", status: "closed", source: "portal", reporterName: "Asha", reporterType: "customer", reporterPhone: "9999900000", attachmentUrl: "data:image/png;base64,AA==",
+  createdAt: new Date("2026-02-01"), closedAt: new Date("2026-02-03"), dueDate: new Date("2026-02-02"), slaEscalationLevel: 1, closedById: "staff1",
+  ...INTERNAL,
+  assignedTo: { id: "eng-secret", name: "Vikram Singh", email: "eng@example.test" },
+  events: [{ id: "e1", type: "assigned", actorLabel: "Staff", actor: { id: "staff1", name: "Staff One" } }],
+};
+function stubShapedHistory() {
+  stubModel("complaint", { findMany: (args: any) => [shape(fullTicket, args)] });
+  stubModel("amcOrderUnit", { findMany: () => [amcLink], count: () => 0 });
+}
+const FORBIDDEN_FOR_CUSTOMERS = ["rootCause", "resolutionNotes", "remarks", "serviceReportUrl", "assignedTo", "assignedToId", "reporterPhone", "dueDate", "slaEscalationLevel", "closedById", "events"];
+
+test("history: a customer never receives the internal ticket fields - enforced in the API response, not the screen", async () => {
+  reset(); stubShapedHistory();
+  const r = await call("custA", "GET", "/recd-units/uA1/history");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.complaints.length, 1);
+  const text = JSON.stringify(r.body);
+  for (const secret of [...Object.values(INTERNAL), "Vikram Singh", "eng-secret", "eng@example.test", "9999900000", "Staff One"]) assert.ok(!text.includes(secret), `leaked: ${secret}`);
+  const ticketKeys = Object.keys(r.body.complaints[0]);
+  for (const k of FORBIDDEN_FOR_CUSTOMERS.filter((f) => f !== "events")) assert.ok(!ticketKeys.includes(k), `customer response has ${k}`);
+  assert.deepEqual(r.body.complaints[0].events, []);
+  // what the customer is entitled to still arrives
+  assert.deepEqual(
+    [r.body.complaints[0].ticketNumber, r.body.complaints[0].description, r.body.complaints[0].status, r.body.complaints[0].severity],
+    ["TCK-1", "Will not start", "closed", "high"],
+  );
+  // and the staff columns were never even queried for a customer
+  const select = called("complaint.findMany")[0][0].select;
+  for (const k of ["rootCause", "resolutionNotes", "remarks", "serviceReportUrl", "assignedTo", "events"]) assert.equal(select[k], undefined, `${k} must not be selected`);
+});
+
+test("history: staff who work the ticket keep the full row (root cause, notes, report link, assignee, timeline)", async () => {
+  for (const who of ["admin", "service"]) {
+    reset(); stubShapedHistory();
+    const r = await call(who, "GET", "/recd-units/uA1/history");
+    assert.equal(r.status, 200, who);
+    const c = r.body.complaints[0];
+    assert.deepEqual([c.rootCause, c.resolutionNotes, c.remarks, c.serviceReportUrl], [INTERNAL.rootCause, INTERNAL.resolutionNotes, INTERNAL.remarks, INTERNAL.serviceReportUrl], who);
+    assert.equal(c.assignedTo.name, "Vikram Singh", who);
+    assert.equal(c.events.length, 1, `${who} sees the timeline`);
+  }
+  reset(); stubShapedHistory();
+  const eng = (await call("engineer", "GET", "/recd-units/uA1/history")).body.complaints[0];
+  assert.equal(eng.rootCause, INTERNAL.rootCause, "an assigned field engineer keeps what they need");
 });
 
 test("history: users with only view_site_status see the unit but no tickets or AMC", async () => {

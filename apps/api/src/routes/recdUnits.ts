@@ -5,6 +5,7 @@ import { asString, asOptionalString } from "../lib/params";
 import { managedRegionIds } from "../lib/regions";
 import { canViewUnit } from "../lib/unitLinks";
 import { takenSerialsMessage } from "../lib/serials";
+import { customerTicketView } from "../lib/ticketViews";
 import { isSerialConflict } from "../lib/uniqueViolations";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { WarrantyError, describeWarranty, listWarrantyHistory, loadWarrantyPolicy, setUnitWarranty } from "../lib/warranty";
@@ -100,7 +101,14 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
   const [complaints, amcLinks] = await Promise.all([
     !canSeeTickets ? [] : prisma.complaint.findMany({
       where: { unitId: unit.id, archivedAt: null, ...ticketScope },
-      select: {
+      // A customer's query never loads the staff-only columns (root cause, notes, remarks, staff report link, assignee); the rows are then
+      // shaped by the same whitelist as GET /complaints (lib/ticketViews.ts). Staff keep the full working row below.
+      select: isCustomer
+        ? {
+            id: true, ticketNumber: true, customerId: true, siteId: true, unitId: true, category: true, issueCategory: true, description: true,
+            severity: true, status: true, source: true, reporterName: true, reporterType: true, createdAt: true, closedAt: true,
+          }
+        : {
         id: true, ticketNumber: true, category: true, issueCategory: true, description: true, severity: true,
         status: true, rootCause: true, resolutionNotes: true, remarks: true, serviceReportUrl: true,
         createdAt: true, closedAt: true, source: true,
@@ -162,7 +170,7 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
     // Tell the UI when a section is hidden by permission rather than genuinely empty.
     complaintsVisible: canSeeTickets,
     amcVisible: canSeeAmc,
-    complaints: complaints.map((c) => ({ ...c, events: canSeeEvents && "events" in c ? c.events : [] })),
+    complaints: complaints.map((c) => (isCustomer ? { ...customerTicketView(c), events: [] } : { ...c, events: canSeeEvents && "events" in c ? c.events : [] })),
     serviceReports: serviceReports.map(shapeReport),
     amcServiceReports: amcReports.map(shapeReport),
     amcOrders,

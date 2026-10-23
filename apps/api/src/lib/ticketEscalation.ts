@@ -12,6 +12,9 @@
  *     event, and only if the ticket still has the level we saw and is not in a paused status;
  *  4. otherwise the level stays where it was, an ESCALATION_FAILED history event says why (once per reason, not once per run), and the next
  *     run retries. A ticket that is paused / closed / reopened in the meantime is simply no longer a candidate.
+ *  5. a level that cannot be delivered never blocks a LATER level the ticket has already earned: if level 1 is stuck (no mail provider, a
+ *     manager without an address) but the ticket is old enough for level 2, Management is still told and the ticket moves straight to
+ *     level 2 - the ESCALATED event lists the skipped level(s). Level 1 is not retried after that (the ticket has outgrown it).
  * Delivery here means the e-mail channel; the in-app record is written on the first attempt only (so retries never repeat it).
  */
 import { COMPLAINT_EVENT, SLA_PAUSED_STATUSES } from "@recd/shared";
@@ -75,7 +78,10 @@ export async function runTicketEscalation(now: Date = new Date()): Promise<Escal
     const ageHours = Math.floor((now.getTime() - c.createdAt.getTime()) / 3_600_000);
     const base = { ticketNumber: c.ticketNumber, customerName: c.customer.name, serialNo: c.unit?.serialNo ?? null, status: c.status, ageHours };
 
-    // A level jump (the job was down) still tells every audience it skipped, one level at a time.
+    // A level jump (the job was down) still tells every audience it skipped, one level at a time. A level that cannot be completed is
+    // recorded and passed over for now, so it never keeps a later, already-earned level from being delivered.
+    let from = c.slaEscalationLevel;
+    const stuckLevels: number[] = [];
     for (let lvl = c.slaEscalationLevel + 1; lvl <= target; lvl++) {
       const recipients = await ticketRecipients(audienceOf(lvl), { regionId: c.site?.regionId });
       // Level 1 goes to the region's Regional Managers; with no region / no manager it falls back to the Service Managers (approved) - say so in the history.
@@ -83,7 +89,8 @@ export async function runTicketEscalation(now: Date = new Date()): Promise<Escal
       if (recipients.length === 0) {
         await recordDeferred(c.id, lvl, "no_recipient", 0);
         summary.deferred++;
-        break;
+        stuckLevels.push(lvl);
+        continue;
       }
 
       await prisma.ticketEscalationDelivery.createMany({ data: recipients.map((recipientId) => ({ complaintId: c.id, level: lvl, recipientId })), skipDuplicates: true });
@@ -123,27 +130,30 @@ export async function runTicketEscalation(now: Date = new Date()): Promise<Escal
       if (undelivered > 0) {
         await recordDeferred(c.id, lvl, "delivery_failed", undelivered);
         summary.deferred++;
-        break;
+        stuckLevels.push(lvl);
+        continue;
       }
 
       // Everyone was told: advance the level, with its history row, in one transaction - only if the ticket is still where we saw it.
       const advanced = await prisma.$transaction(async (tx) => {
         const claimed = await tx.complaint.updateMany({
-          where: { id: c.id, slaEscalationLevel: lvl - 1, status: { notIn: SLA_PAUSED_STATUSES } },
+          where: { id: c.id, slaEscalationLevel: from, status: { notIn: SLA_PAUSED_STATUSES } },
           data: { slaEscalationLevel: lvl, lastEscalatedAt: now },
         });
         if (claimed.count !== 1) return false;
         await logComplaintEventStrict(tx, {
           complaintId: c.id,
           type: COMPLAINT_EVENT.ESCALATED,
-          fromValue: String(lvl - 1),
+          fromValue: String(from),
           toValue: String(lvl),
           actorLabel: "System (SLA)",
-          detail: { audience: audienceOf(lvl), ageHours, recipients: recipients.length, ...(fallback ? { fallback: "service_managers", reason: fallback } : {}) },
+          detail: { audience: audienceOf(lvl), ageHours, recipients: recipients.length, ...(stuckLevels.length ? { skippedLevels: stuckLevels } : {}), ...(fallback ? { fallback: "service_managers", reason: fallback } : {}) },
         });
         return true;
       });
       if (!advanced) break;
+      from = lvl;
+      stuckLevels.length = 0;
       if (lvl === 1) summary.escalatedToRegional++;
       else summary.escalatedToManagement++;
     }
