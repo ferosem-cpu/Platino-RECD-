@@ -61,3 +61,22 @@ test("a normal site renders its serial and both kinds of contact", () => {
   assert.equal(unitSerialsSummary([{ id: "u1", serialNo: "SN-1" }, { id: "u2", serialNo: "SN-2" }]), "SN-1, SN-2");
   assert.deepEqual(siteContactLines(site).map((l) => `${l.heading}|${l.name}|${l.phone}`), ["Site POC|Ravi|9876543210", "Site contact|Desk|9123456780"]);
 });
+
+// Failed requests must not leave a screen on "Loading..." forever or pass off a failure as an empty list (source-level wiring checks,
+// not a device test).
+test("the four data screens catch a failed request and offer a retry instead of hanging or showing a false empty list", () => {
+  for (const [name, src] of [["MySites", mySites], ["MyOrders", myOrders]] as const) {
+    assert.match(src, /catch \(err\)/, name);
+    assert.match(src, /setError\(/, name);
+    assert.match(src, /Tap to retry/, name);
+  }
+  for (const [name, src] of [["OrderDetail", orderDetail], ["SiteDetail", siteDetail]] as const) {
+    assert.match(src, /load\(\)\.catch\(/, name);
+    assert.match(src, /setLoadError\(/, name);
+    assert.match(src, /Tap to retry/, name);
+  }
+});
+
+test("tap-to-call reports a device that cannot dial instead of failing silently", () => {
+  assert.match(contacts, /Linking\.openURL\(href\)\.catch\(/);
+});

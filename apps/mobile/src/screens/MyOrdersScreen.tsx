@@ -19,10 +19,15 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [error, setError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setRefreshing(true);
+    setError(null);
     try {
       setOrders(await api<OrderRow[]>("/orders"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load your orders.");
     } finally {
       setRefreshing(false);
     }
@@ -40,7 +45,15 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
         data={orders}
         keyExtractor={(item) => item.id}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}
-        ListEmptyComponent={<Text style={styles.empty}>No orders yet.</Text>}
+        ListEmptyComponent={
+          error ? (
+            <Pressable onPress={load}>
+              <Text style={styles.error}>{error} Tap to retry.</Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.empty}>No orders yet.</Text>
+          )
+        }
         renderItem={({ item }) => (
           <Pressable
             style={styles.card}
@@ -64,6 +77,7 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   empty: { textAlign: "center", marginTop: 40, color: "#999" },
+  error: { textAlign: "center", marginTop: 40, color: "#dc2626" },
   card: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 14, marginBottom: 10 },
   cardTitle: { fontWeight: "600", fontSize: 15 },
   cardSubtitle: { color: "#666", marginTop: 2 },

@@ -67,10 +67,16 @@ export default function SiteDetailScreen({ route }: { route: any }) {
     setSelectedStage((prev) => prev ?? siteData.currentStage.id);
   }, [siteId]);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const refresh = useCallback(() => {
+    setLoadError(null);
+    load().catch((err) => setLoadError(err instanceof Error ? err.message : "Could not load this site."));
+  }, [load]);
+
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load]),
+      refresh();
+    }, [refresh]),
   );
 
   async function submitStageEvent() {
@@ -116,7 +122,15 @@ export default function SiteDetailScreen({ route }: { route: any }) {
     }
   }
 
-  if (!site) return <Text style={styles.empty}>Loading...</Text>;
+  if (!site) {
+    return loadError ? (
+      <Pressable onPress={refresh}>
+        <Text style={styles.error}>{loadError} Tap to retry.</Text>
+      </Pressable>
+    ) : (
+      <Text style={styles.empty}>Loading...</Text>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -193,6 +207,7 @@ export default function SiteDetailScreen({ route }: { route: any }) {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   empty: { textAlign: "center", marginTop: 40, color: "#999" },
+  error: { textAlign: "center", marginTop: 40, color: "#dc2626" },
   title: { fontSize: 18, fontWeight: "600" },
   subtitle: { color: "#666", marginTop: 4, fontSize: 13 },
   section: { marginTop: 20, marginBottom: 8, fontWeight: "600", fontSize: 14 },

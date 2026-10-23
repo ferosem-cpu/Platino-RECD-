@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, Pressable, Linking, StyleSheet } from "react-native";
+import { View, Text, Pressable, Linking, StyleSheet, Alert } from "react-native";
 import { siteContactLines, telHref, type SiteContactSource } from "@recd/shared";
 
 /**
@@ -18,7 +18,7 @@ export default function SiteContacts({ site }: { site: SiteContactSource | null 
             <Text style={styles.heading}>{c.heading}</Text>
             <Text style={styles.name}>{c.name}</Text>
             {href ? (
-              <Pressable onPress={() => Linking.openURL(href)} accessibilityRole="link">
+              <Pressable onPress={() => Linking.openURL(href).catch(() => Alert.alert("Cannot place a call from this device"))} accessibilityRole="link">
                 <Text style={styles.phoneLink}>{c.phone}</Text>
               </Pressable>
             ) : (
