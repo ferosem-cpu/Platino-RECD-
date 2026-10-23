@@ -42,6 +42,10 @@ recdUnitsRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), 
     const o = await prisma.order.findUnique({ where: { id: unit.orderId }, select: { customerId: true } });
     if (o?.customerId !== req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
   }
+  if (req.auth!.vendorId) {
+    const s = unit.siteId ? await prisma.site.findUnique({ where: { id: unit.siteId }, select: { vendorId: true } }) : null;
+    if (s?.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  }
   res.json(unit);
 });
 

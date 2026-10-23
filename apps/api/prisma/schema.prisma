@@ -96,6 +96,7 @@ model User {
   regionsManaged       RegionManager[]
   auditAsActor         UserAuditLog[]     @relation("AuditActor")
   auditAsTarget        UserAuditLog[]     @relation("AuditTarget")
+  complaintEvents      ComplaintEvent[]   @relation("ComplaintEventActor")
 }
 
 model OtpCode {
@@ -552,7 +553,32 @@ model Complaint {
   reporterType   String?
   reporterVerifiedAt DateTime?
 
+  /// SLA escalation progress: 0 none, 1 Regional Manager notified, 2 Management notified.
+  /// Only ever moves up (see lib/sla.ts and the escalation cron).
+  slaEscalationLevel Int       @default(0)
+  lastEscalatedAt    DateTime?
+  events         ComplaintEvent[]
+
   @@index([unitId])
+}
+
+/// Append-only ticket history: creation, status changes, assignment, escalation.
+model ComplaintEvent {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  /// see COMPLAINT_EVENT in packages/shared
+  type        String
+  fromValue   String?
+  toValue     String?
+  actorId     String?
+  actor       User?     @relation("ComplaintEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  /// Free label when there is no user: "Customer (public)", "System (SLA)".
+  actorLabel  String?
+  detail      Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([complaintId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +655,11 @@ model CompanySettings {
   /// Free-text instructions from the admin, appended to the in-app agent's system prompt
   /// on every turn (e.g. "always confirm the site address before raising a complaint").
   agentCustomInstructions String?
+
+  /// Unresolved ticket older than this -> Regional Manager(s) notified (SLA level 1).
+  slaRegionalManagerHours Int @default(24)
+  /// ...older than this -> Management notified (SLA level 2). Always >= the Regional Manager value.
+  slaManagementHours      Int @default(48)
 }
 
 // ---------------------------------------------------------------------------

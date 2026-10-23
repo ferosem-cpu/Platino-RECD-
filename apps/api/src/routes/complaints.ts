@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COMPLAINT_STATUS, ROLE_KEY } from "@recd/shared";
+import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COMPLAINT_STATUS, COMPLAINT_EVENT, ROLE_KEY } from "@recd/shared";
 
 /** Statuses that count as "resolved" for the one-open-complaint-per-RECD-serial-number rule. */
 const CLOSED_COMPLAINT_STATUSES: string[] = [COMPLAINT_STATUS.RESOLVED, COMPLAINT_STATUS.CLOSED];
@@ -8,6 +8,8 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString } from "../lib/params";
 import { managedRegionIds } from "../lib/regions";
+import { logComplaintEvent } from "../lib/ticketEvents";
+import { notifyMany, ticketRecipients } from "../lib/ticketNotify";
 
 export const complaintsRouter = Router();
 complaintsRouter.use(authenticate);
@@ -138,10 +140,21 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
     },
   });
 
-  const serviceTeamUsers = await prisma.user.findMany({ where: { role: { key: ROLE_KEY.SERVICE_TEAM } } });
-  await Promise.all(
-    serviceTeamUsers.map((u) => notifySafely({ recipientId: u.id, templateKey: "complaint_raised", data: { ticketNumber } })),
-  );
+  await logComplaintEvent({
+    complaintId: complaint.id,
+    type: COMPLAINT_EVENT.CREATED,
+    toValue: complaint.status,
+    actorId: req.auth!.userId,
+    detail: { source: "portal" },
+  });
+
+  // Service desk, Service Managers, Management and the site region's Regional Managers.
+  try {
+    const recipients = await ticketRecipients("raised", { regionId: targetSite.regionId });
+    await notifyMany(recipients, "complaint_raised", { ticketNumber });
+  } catch (err) {
+    console.error("Complaint notification failed", err);
+  }
 
   res.status(201).json(complaint);
 });
@@ -181,6 +194,25 @@ complaintsRouter.patch(
       include: { customer: { include: { contacts: true } } },
     });
 
+    if (parsed.data.status !== existing.status) {
+      await logComplaintEvent({
+        complaintId: id,
+        type: COMPLAINT_EVENT.STATUS_CHANGED,
+        fromValue: existing.status,
+        toValue: parsed.data.status,
+        actorId: req.auth!.userId,
+      });
+    }
+    if (canManage && parsed.data.assignedToId !== undefined && parsed.data.assignedToId !== existing.assignedToId) {
+      await logComplaintEvent({
+        complaintId: id,
+        type: COMPLAINT_EVENT.ASSIGNED,
+        fromValue: existing.assignedToId,
+        toValue: parsed.data.assignedToId,
+        actorId: req.auth!.userId,
+      });
+    }
+
     // Notify the customer of the status change.
     const customerContact = complaint.customer.contacts[0];
     if (customerContact) {
@@ -200,6 +232,33 @@ complaintsRouter.patch(
     }
 
     res.json(complaint);
+  },
+);
+
+/** Ticket history (created, status changes, assignment, escalations), oldest first. */
+complaintsRouter.get(
+  "/:id/history",
+  requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS, PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW),
+  async (req: AuthenticatedRequest, res) => {
+    const id = asString(req.params.id);
+    const ticket = await prisma.complaint.findUnique({ where: { id }, include: { site: { select: { regionId: true } } } });
+    if (!ticket) return res.status(404).json({ error: "Complaint not found" });
+
+    const { userId, roleKey, permissions } = req.auth!;
+    const broad = permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) || permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW);
+    if (roleKey === ROLE_KEY.REGIONAL_MANAGER) {
+      const regions = await managedRegionIds(userId, roleKey);
+      if (!ticket.site?.regionId || !regions.includes(ticket.site.regionId)) return res.status(403).json({ error: "Forbidden" });
+    } else if (!broad && ticket.assignedToId !== userId) {
+      return res.status(403).json({ error: "This complaint is not assigned to you" });
+    }
+
+    const events = await prisma.complaintEvent.findMany({
+      where: { complaintId: id },
+      include: { actor: { select: { id: true, name: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+    res.json({ slaEscalationLevel: ticket.slaEscalationLevel, events });
   },
 );
 

@@ -283,3 +283,17 @@ export const PUBLIC_OTP = {
   MAX_VERIFY_ATTEMPTS: 5,
   SESSION_SECONDS: 900,
 } as const;
+
+export const COMPLAINT_EVENT = {
+  CREATED: "created",
+  STATUS_CHANGED: "status_changed",
+  ASSIGNED: "assigned",
+  ESCALATED: "escalated",
+} as const;
+export type ComplaintEventType = (typeof COMPLAINT_EVENT)[keyof typeof COMPLAINT_EVENT];
+
+/** Default SLA windows (hours since the ticket was raised). Editable in Settings. */
+export const SLA_DEFAULTS = { REGIONAL_MANAGER_HOURS: 24, MANAGEMENT_HOURS: 48 } as const;
+
+/** Statuses in which the SLA clock is not escalating: finished, or waiting on the customer. */
+export const SLA_PAUSED_STATUSES: string[] = ["resolved", "closed", "waiting_for_customer"];

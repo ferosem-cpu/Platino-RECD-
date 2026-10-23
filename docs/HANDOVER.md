@@ -707,3 +707,27 @@ Failed deliveries are visible in `PublicOtp.deliveryStatus`.
 
 ### Not yet done (later phases)
 Reminder/escalation engine, AMC vendor/customer dates + renewals, warranty status, signed service reports, ticket SLA escalation.
+
+## 27. Service module – Phase 3: ticket history, notifications and SLA escalation
+
+**Branch:** `feature/service-module-phase3` (stacked on phase 2 / PR #5). **Migration:** `20261007230000_ticket_sla_history` – NOT applied to production; apply (after the two earlier ones) before deploying the API.
+
+### What it does
+- **Ticket history** – new append-only `ComplaintEvent` table (created, status_changed, assigned, escalated) with actor (user or label such as "System (SLA)"). Written by the portal create, public create, PATCH and the escalation cron. Staff read it via `GET /complaints/:id/history` (same access rules as the list: Regional Managers only for their regions, engineers only their own tickets) and see it in the ticket editor.
+- **Notifications on raise** – both the portal and the public flow now alert Service Team, Service Managers, Management, the Regional Manager(s) of the site's region and (if any) the assignee, via `lib/ticketNotify.ts`.
+- **SLA escalation** – `GET /complaints/cron/escalate` (Vercel cron `30 3 * * *`, `Authorization: Bearer $CRON_SECRET`, required – returns 401 if unset). A ticket not resolved/closed (and not waiting_for_customer) escalates to level 1 (Regional Manager of the site's region; falls back to Service Managers if the site has no region/manager) after **24 h** and level 2 (Management + Owner/Admin) after **48 h**, measured from creation. Levels only increase and are claimed atomically (`updateMany ... WHERE slaEscalationLevel = old`), so overlapping runs never double-alert; a level jump (cron was down) alerts every skipped audience. Emails use the `complaint_escalated` template.
+- **Editable windows** – Settings page → "Ticket SLA escalation" (`PUT /settings/sla`, needs `manage_settings`; management hours must be ≥ regional hours). Stored on `CompanySettings.slaRegionalManagerHours / slaManagementHours`.
+- Staff complaints list shows an "SLA breached" badge for tickets escalated by the cron.
+
+### Decisions / caveats to know
+- **Backfill:** tickets that exist when the migration runs are set to `slaEscalationLevel = 2` (no `lastEscalatedAt`) so the first cron run does not flood managers with the whole backlog; they show no badge. Only tickets raised afterwards escalate.
+- **Cron frequency:** daily, so an escalation can lag its threshold by up to ~24 h. Hourly needs a Vercel plan that allows it (change `schedule` in `apps/api/vercel.json`, e.g. `0 * * * *`); nothing else changes.
+- The SLA clock is simple age since creation; there is no pause/resume bookkeeping beyond skipping `waiting_for_customer`.
+- WhatsApp is still a stub channel for staff notifications (in-app + email are live).
+- The cron route could not be exercised against a live database in the sandbox (Prisma engines are blocked); the migration chain was applied to a scratch Postgres and the pure SLA logic is unit-tested (`npm test --workspace=apps/api`, 14 tests).
+
+### Remaining roadmap (not started)
+1. Region-wise Service Manager reminders (daily digest of open/overdue tickets per region) – can reuse the cron and `ticketRecipients`.
+2. AMC: vendor vs customer dates, renewal history, configurable lead times (60/30/7), login pop-up reminders.
+3. Warranty status (Active / Near Expiry / Expired) + reminders.
+4. Customer-signed digital service report and digital AMC service report (signature pad, PDF, linked to unit/site/customer/AMC).
