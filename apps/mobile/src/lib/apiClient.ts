@@ -16,6 +16,14 @@ export async function clearToken(): Promise<void> {
   await AsyncStorage.removeItem(TOKEN_KEY);
 }
 
+/** A failed request. The message is unchanged; status and body are there for callers that need them. */
+export class ApiRequestError extends Error {
+  constructor(message: string, public status: number, public body: Record<string, unknown>) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = await getToken();
   const res = await fetch(`${API_URL}${path}`, {
@@ -28,7 +36,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`);
+    throw new ApiRequestError(body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`, res.status, body);
   }
   return res.json() as Promise<T>;
 }

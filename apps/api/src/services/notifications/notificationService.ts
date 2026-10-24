@@ -13,6 +13,14 @@ interface SendArgs {
 
 const DEFAULT_CHANNELS: NotificationChannel[] = ["in_app", "email"];
 
+/**
+ * What is written to NotificationLog.payload. The provider still receives the full data (the email
+ * has to contain the code), but a one-time code must never be persisted in the log table.
+ */
+export function loggablePayload(templateKey: string, data: Record<string, unknown>): Record<string, unknown> {
+  return templateKey === "otp_code" ? { ...data, code: "[redacted]" } : data;
+}
+
 export async function send({ recipientId, templateKey, data, channels }: SendArgs) {
   let targetChannels = channels;
   if (!targetChannels) {
@@ -24,14 +32,20 @@ export async function send({ recipientId, templateKey, data, channels }: SendArg
   const results = await Promise.all(
     targetChannels.map(async (channel) => {
       const provider = providersByChannel[channel];
-      const delivered = await provider.send({ recipientId, templateKey, data });
+      // A provider that throws is a failed delivery: it is logged as failed (never as sent) and cannot stop the other channels' records.
+      let delivered = false;
+      try {
+        delivered = await provider.send({ recipientId, templateKey, data });
+      } catch (err) {
+        console.error(`[notify] ${channel} provider threw for ${templateKey}`, err);
+      }
       const isLive = LIVE_NOTIFICATION_CHANNELS.includes(channel);
       return prisma.notificationLog.create({
         data: {
           recipientId,
           channel,
           templateKey,
-          payload: data as Prisma.InputJsonValue,
+          payload: loggablePayload(templateKey, data) as Prisma.InputJsonValue,
           status: delivered ? "sent" : isLive ? "failed" : "pending_provider_setup",
           sentAt: delivered ? new Date() : null,
         },

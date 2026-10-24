@@ -4,6 +4,9 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
+import { nameWithMobile } from "@/lib/contactDisplay";
 import { useAuth } from "@/components/AuthContext";
 import { DataTable, DataTableColumn } from "@/components/DataTable";
 
@@ -33,6 +36,8 @@ function CustomersPageInner() {
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
+  // The contact being edited (the API changes exactly this one, never an arbitrary contact).
+  const [editingContactId, setEditingContactId] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -80,6 +85,7 @@ function CustomersPageInner() {
   function openEdit(c: Customer) {
     const contact = c.contacts[0];
     setEditing(c);
+    setEditingContactId(contact?.id);
     setForm({
       name: c.name,
       address: c.address ?? "",
@@ -93,8 +99,13 @@ function CustomersPageInner() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setFormError(null);
+    const phoneError = mobileFieldError(form.contactPhone);
+    if (phoneError) {
+      setFormError(phoneError);
+      return;
+    }
+    setSaving(true);
     try {
       if (editing) {
         await api(`/customers/${editing.id}`, {
@@ -102,8 +113,9 @@ function CustomersPageInner() {
           body: JSON.stringify({
             name: form.name,
             address: form.address || undefined,
+            contactId: editingContactId,
             contactName: form.contactName || undefined,
-            contactPhone: form.contactPhone || undefined,
+            contactPhone: cleanMobile(form.contactPhone),
             contactEmail: form.contactEmail || undefined,
           }),
         });
@@ -114,7 +126,7 @@ function CustomersPageInner() {
             name: form.name,
             address: form.address || undefined,
             contactName: form.contactName,
-            contactPhone: form.contactPhone,
+            contactPhone: cleanMobile(form.contactPhone),
             contactEmail: form.contactEmail || undefined,
           }),
         });
@@ -124,7 +136,7 @@ function CustomersPageInner() {
       setForm({ name: "", address: "", contactName: "", contactPhone: "", contactEmail: "" });
       load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to save customer");
+      setFormError(apiErrorMessage(err, "Failed to save customer"));
     } finally {
       setSaving(false);
     }
@@ -197,8 +209,7 @@ function CustomersPageInner() {
               const contact = c.contacts[0];
               return contact ? (
                 <>
-                  {contact.name}
-                  {contact.phone && <> · {contact.phone}</>}
+                  {nameWithMobile(contact.name, contact.phone)}
                 </>
               ) : (
                 "-"
@@ -250,7 +261,7 @@ function CustomersPageInner() {
                     {contact && (
                       <div className="data-card-row">
                         <span className="label">Contact</span>
-                        <span className="value">{contact.name}{contact.phone && ` · ${contact.phone}`}</span>
+                        <span className="value">{nameWithMobile(contact.name, contact.phone)}</span>
                       </div>
                     )}
                     {canManage && (
@@ -285,7 +296,7 @@ function CustomersPageInner() {
               <textarea placeholder="Address (optional)" rows={2} className="field w-full" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <input required placeholder="Contact name" className="field" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
-                <input required placeholder="Contact phone (login)" className="field" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
+                <input required inputMode="tel" title="10-digit Indian mobile number" placeholder="Contact mobile (login)" className="field" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
               </div>
               <input type="email" placeholder="Contact email (optional)" className="field w-full" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} />
               <p className="text-[11px] text-gray-400">The phone number is what the customer uses to log in with their Order ID.</p>

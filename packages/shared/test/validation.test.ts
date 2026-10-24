@@ -6,8 +6,11 @@ import {
   recdSerialSchema,
   createOrderSchema,
   addOrderLineItemSchema,
+  createAmcOrderSchema,
   createUserSchema,
+  correctRecdSerialSchema,
 } from "../src/schemas";
+import { canCorrectSerial, ROLE_KEY } from "../src/constants";
 
 test("normalizeIndianMobile accepts common Indian formats and returns bare 10 digits", () => {
   for (const input of ["9884977994", "+919884977994", "919884977994", "09884977994", "98849 77994", "98849-77994", " +91 98849 77994 "]) {
@@ -59,4 +62,30 @@ test("createUserSchema makes mobile mandatory and normalises it", () => {
   assert.equal(ok.phone, "9884977994");
   assert.equal(createUserSchema.safeParse({ name: "A", email: "a@b.co", roleKey: "sales" }).success, false);
   assert.equal(createUserSchema.safeParse({ name: "A", email: "a@b.co", roleKey: "sales", phone: "12" }).success, false);
+});
+
+test("createAmcOrderSchema: unitIds optional, defaults to none, rejects repeats", () => {
+  const base = { poNo: "P1", poDate: "2026-01-01T00:00:00.000Z", customerId: "c", location: "L", item: "RECD", qty: 2, amcFrequencyPerYear: 4, amcType: "camc" };
+  const none = createAmcOrderSchema.parse(base);
+  assert.deepEqual(none.unitIds, []);
+  assert.deepEqual(createAmcOrderSchema.parse({ ...base, unitIds: ["u1", "u2"] }).unitIds, ["u1", "u2"]);
+  assert.equal(createAmcOrderSchema.safeParse({ ...base, unitIds: ["u1", "u1"] }).success, false);
+  assert.equal(createAmcOrderSchema.safeParse({ ...base, unitIds: [""] }).success, false);
+});
+
+test("serial correction: both serials use the canonical rule and a reason is mandatory", () => {
+  const ok = correctRecdSerialSchema.safeParse({ expectedSerialNo: " old-1 ", serialNo: "new-2", reason: "  typo at entry " });
+  assert.ok(ok.success);
+  assert.deepEqual(ok.data, { expectedSerialNo: "OLD-1", serialNo: "NEW-2", reason: "typo at entry" });
+  for (const bad of [
+    { expectedSerialNo: "OLD-1", serialNo: "NEW-2" },
+    { expectedSerialNo: "OLD-1", serialNo: "NEW-2", reason: "abc" },
+    { expectedSerialNo: "OLD-1", serialNo: "bad serial", reason: "typo at entry" },
+    { serialNo: "NEW-2", reason: "typo at entry" },
+  ]) assert.equal(correctRecdSerialSchema.safeParse(bad).success, false, JSON.stringify(bad));
+});
+
+test("serial correction is limited to the administrative tier", () => {
+  for (const r of [ROLE_KEY.SUPER_ADMIN, ROLE_KEY.OWNER_ADMIN, ROLE_KEY.MANAGEMENT]) assert.equal(canCorrectSerial(r), true, r);
+  for (const r of [ROLE_KEY.SALES, ROLE_KEY.SERVICE_MANAGER, ROLE_KEY.SERVICE_ENGINEER, ROLE_KEY.CUSTOMER, ROLE_KEY.REGIONAL_MANAGER, null, undefined, ""]) assert.equal(canCorrectSerial(r as string), false, String(r));
 });

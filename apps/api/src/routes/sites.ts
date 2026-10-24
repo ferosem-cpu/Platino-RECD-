@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import {
   createStageEventSchema,
   confirmExhaustHookupSchema,
@@ -17,15 +17,26 @@ import {
   PENDING_ACTION_CATEGORY,
   VENDOR_STATUS,
   STAGE_KEY,
+  ROLE_KEY,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString, asOptionalString } from "../lib/params";
+import { findTakenSerials, takenSerialsMessage } from "../lib/serials";
+import { isSerialConflict, SERIAL_RACE_MESSAGE } from "../lib/uniqueViolations";
+import { OrderCreationError, resolveDuplicatePo, withOrderNumber } from "../lib/orderCreation";
 import { createDriveFolder, getDriveFolderId } from "../lib/googleDrive";
+import { managedRegionIds } from "../lib/regions";
+import { SITE_ORDER_WITH_REFS_SELECT, SITE_PEOPLE_INCLUDE, STAFF_REF_SELECT, VENDOR_REF_SELECT } from "../lib/safeSelect";
 
 export const sitesRouter = Router();
 sitesRouter.use(authenticate);
+
+/** True for the staff role whose site visibility follows its mapped regions (customers and vendors are scoped by their own ownership rules instead). */
+function isRegionScoped(auth: NonNullable<AuthenticatedRequest["auth"]>): boolean {
+  return !auth.customerId && !auth.vendorId && auth.roleKey === ROLE_KEY.REGIONAL_MANAGER;
+}
 
 sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
   const assignedToMe = asOptionalString(req.query.assigned_to) === "me";
@@ -34,15 +45,17 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
   if (req.auth!.customerId) where.order = { customerId: req.auth!.customerId };
   // Vendor isolation: a vendor's engineers only ever see sites assigned to their own vendor.
   if (req.auth!.vendorId) where.vendorId = req.auth!.vendorId;
+  // A Regional Manager only sees sites in the regions mapped to them (the same rule the ticket module already applies); none mapped = nothing.
+  if (isRegionScoped(req.auth!)) where.regionId = { in: await managedRegionIds(req.auth!.userId, req.auth!.roleKey) };
 
   const sites = await prisma.site.findMany({
     where,
     include: {
-      order: { include: { customer: true, product: true, lineItems: { include: { product: true } } } },
-      currentStage: true,
-      assignedEngineer: true,
-      vendor: true,
+      order: { select: { ...SITE_ORDER_WITH_REFS_SELECT, lineItems: { include: { product: true } } } },
+      ...SITE_PEOPLE_INCLUDE,
       stageEvents: { orderBy: { createdAt: "desc" }, take: 1, include: { statusOption: true } },
+      // The serial(s) printed on this site's RECD(s), for list screens (mobile). Same rows the by-id endpoint returns, narrowed to what a list shows.
+      units: { select: { id: true, serialNo: true, status: true }, orderBy: { createdAt: "asc" } },
     },
     orderBy: { updatedAt: "desc" },
   });
@@ -55,15 +68,13 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
   const detail = await prisma.site.findUnique({
     where: { id: siteId },
     include: {
-      order: { include: { customer: true, product: true, lineItems: { include: { product: true }, orderBy: { createdAt: "asc" } } } },
-      currentStage: true,
-      assignedEngineer: true,
-      vendor: true,
+      order: { select: { ...SITE_ORDER_WITH_REFS_SELECT, lineItems: { include: { product: true }, orderBy: { createdAt: "asc" } } } },
+      ...SITE_PEOPLE_INCLUDE,
       stageEvents: {
-        include: { stageDefinition: true, statusOption: true, createdBy: true },
+        include: { stageDefinition: true, statusOption: true, createdBy: { select: STAFF_REF_SELECT } },
         orderBy: { createdAt: "asc" },
       },
-      photos: { include: { checkpoint: true, uploadedBy: true }, orderBy: { uploadedAt: "asc" } },
+      photos: { include: { checkpoint: true, uploadedBy: { select: STAFF_REF_SELECT } }, orderBy: { uploadedAt: "asc" } },
       pendingActions: { orderBy: { createdAt: "desc" } },
       contacts: { orderBy: { createdAt: "asc" } },
       documentRequirements: { include: { requirementType: true }, orderBy: { requirementType: { sequenceOrder: "asc" } } },
@@ -77,6 +88,9 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
     return res.status(403).json({ error: "Forbidden" });
   }
   if (req.auth!.vendorId && detail.vendorId !== req.auth!.vendorId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  if (isRegionScoped(req.auth!) && !(detail.regionId && (await managedRegionIds(req.auth!.userId, req.auth!.roleKey)).includes(detail.regionId))) {
     return res.status(403).json({ error: "Forbidden" });
   }
   res.json(detail);
@@ -147,47 +161,65 @@ sitesRouter.post("/:id/clone-order", requirePermission(PERMISSION_KEY.MANAGE_ORD
   const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: true } });
   if (!site) return res.status(404).json({ error: "Site not found" });
 
-  const taken = await prisma.recdUnit.findMany({
-    where: { serialNo: { in: parsed.data.recdSerials } },
-    select: { serialNo: true },
-  });
-  if (taken.length) {
-    return res.status(409).json({ error: `Serial number already registered: ${taken.map((t) => t.serialNo).join(", ")}` });
-  }
+  const product = await prisma.product.findUnique({ where: { id: parsed.data.productId }, select: { id: true } });
+  if (!product) return res.status(400).json({ error: "Product not found" });
+
+  const taken = await findTakenSerials(parsed.data.recdSerials);
+  if (taken.length) return res.status(409).json({ error: takenSerialsMessage(taken) });
 
   const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
-  const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-  const newOrder = await prisma.order.create({
-    data: {
-      orderNumber,
-      customerId: site.order.customerId,
-      productId: parsed.data.productId,
-      quantity: parsed.data.quantity,
-      // A sibling order for the same physical location is normally raised against the same PO.
-      poNumber: site.order.poNumber,
-      poDate: site.order.poDate,
-      salesEngineerId: req.auth!.userId,
-      site: {
-        create: {
-          address: site.address,
-          companyName: site.companyName,
-          vendorId: site.vendorId,
-          regionId: site.regionId,
-          currentStageId: firstStage.id,
-        },
-      },
-    },
-    include: { site: true, product: true },
-  });
-  await prisma.recdUnit.createMany({
-    data: parsed.data.recdSerials.map((serialNo) => ({
-      serialNo,
-      orderId: newOrder.id,
-      siteId: newOrder.site?.id,
-      productId: parsed.data.productId,
-    })),
-  });
+  // Order and units are created together so a serial conflict (a request racing us past the
+  // check above) cannot leave an order behind with no units. A generated-order-number collision is
+  // retried (bounded) in a fresh transaction.
+  // The PO is the one the caller entered, else the source order's. It goes through the SAME duplicate rule as POST /orders (per customer,
+  // case-insensitive, under the customer + PO lock, inside this transaction): a duplicate is refused (409 DUPLICATE_PO) unless an
+  // administrator role passes allowDuplicatePo, in which case the clone is created and flagged poDuplicateFlag.
+  const poNumber = parsed.data.poNumber?.trim() || site.order.poNumber;
+  const poDate = parsed.data.poDate ? new Date(parsed.data.poDate) : parsed.data.poNumber ? undefined : site.order.poDate;
+  let newOrder;
+  try {
+    newOrder = await withOrderNumber((orderNumber) =>
+      prisma.$transaction(async (tx) => {
+        const poDuplicateFlag = await resolveDuplicatePo(tx, { customerId: site.order.customerId, poNumber, allowDuplicatePo: parsed.data.allowDuplicatePo, roleKey: req.auth!.roleKey });
+        const created = await tx.order.create({
+          data: {
+            orderNumber,
+            customerId: site.order.customerId,
+            productId: parsed.data.productId,
+            quantity: parsed.data.quantity,
+            poNumber,
+            poDate,
+            poDuplicateFlag,
+            salesEngineerId: req.auth!.userId,
+            site: {
+              create: {
+                address: site.address,
+                companyName: site.companyName,
+                vendorId: site.vendorId,
+                regionId: site.regionId,
+                currentStageId: firstStage.id,
+              },
+            },
+          },
+          include: { site: true, product: true },
+        });
+        await tx.recdUnit.createMany({
+          data: parsed.data.recdSerials.map((serialNo) => ({
+            serialNo,
+            orderId: created.id,
+            siteId: created.site?.id,
+            productId: parsed.data.productId,
+          })),
+        });
+        return created;
+      }),
+    );
+  } catch (err) {
+    if (err instanceof OrderCreationError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}), ...(err.existingOrderNumber ? { existingOrderNumber: err.existingOrderNumber } : {}) });
+    if (isSerialConflict(err)) return res.status(409).json({ error: SERIAL_RACE_MESSAGE });
+    throw err;
+  }
 
   res.status(201).json(newOrder);
 });
@@ -373,7 +405,7 @@ sitesRouter.post("/:id/assign-vendor", requirePermission(PERMISSION_KEY.MANAGE_V
   const updated = await prisma.site.update({
     where: { id: siteId },
     data,
-    include: { vendor: true, assignedEngineer: true },
+    include: { vendor: { select: VENDOR_REF_SELECT }, assignedEngineer: { select: STAFF_REF_SELECT } },
   });
 
   // Notify the vendor's engineers a new site landed in their queue - a newly-assigned vendor
@@ -420,15 +452,37 @@ sitesRouter.patch("/:id", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS), 
 // Site contacts (multiple POCs per site)
 // ---------------------------------------------------------------------------
 
+/**
+ * Loads the site a contact request targets and enforces the same scoping the other site routes use:
+ * a vendor user only reaches sites assigned to their vendor, a customer user only their own sites.
+ * Staff with no vendor/customer link (management, PMs, engineers on the permission) are unscoped.
+ * Sends the 404/403 itself and returns null when the request must stop.
+ */
+async function loadScopedSite(req: AuthenticatedRequest, res: Response) {
+  const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, include: { order: true } });
+  if (!site) {
+    res.status(404).json({ error: "Site not found" });
+    return null;
+  }
+  if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) {
+    res.status(403).json({ error: "Forbidden" });
+    return null;
+  }
+  if (req.auth!.customerId && site.order.customerId !== req.auth!.customerId) {
+    res.status(403).json({ error: "Forbidden" });
+    return null;
+  }
+  return site;
+}
+
 sitesRouter.post("/:id/contacts", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
   const parsed = createSiteContactSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const siteId = asString(req.params.id);
-  const site = await prisma.site.findUnique({ where: { id: siteId } });
-  if (!site) return res.status(404).json({ error: "Site not found" });
+  const site = await loadScopedSite(req, res);
+  if (!site) return;
 
-  const contact = await prisma.siteContact.create({ data: { siteId, ...parsed.data } });
+  const contact = await prisma.siteContact.create({ data: { siteId: site.id, ...parsed.data } });
   res.status(201).json(contact);
 });
 
@@ -439,8 +493,10 @@ sitesRouter.patch(
     const parsed = updateSiteContactSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+    const site = await loadScopedSite(req, res);
+    if (!site) return;
     const contact = await prisma.siteContact.findUnique({ where: { id: asString(req.params.contactId) } });
-    if (!contact || contact.siteId !== req.params.id) return res.status(404).json({ error: "Contact not found" });
+    if (!contact || contact.siteId !== site.id) return res.status(404).json({ error: "Contact not found" });
 
     const updated = await prisma.siteContact.update({ where: { id: contact.id }, data: parsed.data });
     res.json(updated);
@@ -451,8 +507,10 @@ sitesRouter.delete(
   "/:id/contacts/:contactId",
   requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS),
   async (req: AuthenticatedRequest, res) => {
+    const site = await loadScopedSite(req, res);
+    if (!site) return;
     const contact = await prisma.siteContact.findUnique({ where: { id: asString(req.params.contactId) } });
-    if (!contact || contact.siteId !== req.params.id) return res.status(404).json({ error: "Contact not found" });
+    if (!contact || contact.siteId !== site.id) return res.status(404).json({ error: "Contact not found" });
 
     await prisma.siteContact.delete({ where: { id: contact.id } });
     res.status(204).send();

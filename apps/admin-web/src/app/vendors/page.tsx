@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
+import { emailWithMobile, mobileOrNone } from "@/lib/contactDisplay";
 import { DataTable, DataTableColumn } from "@/components/DataTable";
 
 interface Vendor {
@@ -31,7 +34,7 @@ export default function VendorsPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [approval, setApproval] = useState<{ name: string; email: string; tempPassword?: string; created: boolean } | null>(null);
+  const [approval, setApproval] = useState<{ name: string; email: string; tempPassword?: string; created: boolean; skippedReason?: string } | null>(null);
 
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -51,25 +54,30 @@ export default function VendorsPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setFormError(null);
+    const phoneError = mobileFieldError(form.contactPhone);
+    if (phoneError) {
+      setFormError(phoneError);
+      return;
+    }
+    setSaving(true);
     try {
-      const res = await api<{ contactLoginCreated: boolean; contactEmail: string; tempPassword?: string; name: string }>("/vendors", {
+      const res = await api<{ contactLoginCreated: boolean; contactLoginSkippedReason?: string; contactEmail: string; tempPassword?: string; name: string }>("/vendors", {
         method: "POST",
         body: JSON.stringify({
           name: form.name,
           address: form.address || undefined,
           contactName: form.contactName,
           contactEmail: form.contactEmail,
-          contactPhone: form.contactPhone || undefined,
+          contactPhone: cleanMobile(form.contactPhone),
         }),
       });
-      setApproval({ name: res.name, email: res.contactEmail, tempPassword: res.tempPassword, created: res.contactLoginCreated });
+      setApproval({ name: res.name, email: res.contactEmail, tempPassword: res.tempPassword, created: res.contactLoginCreated, skippedReason: res.contactLoginSkippedReason });
       setOpen(false);
       setForm(emptyForm);
       load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to add vendor");
+      setFormError(apiErrorMessage(err, "Failed to add vendor"));
     } finally {
       setSaving(false);
     }
@@ -79,8 +87,8 @@ export default function VendorsPage() {
     setBusy(v.id);
     setError(null);
     try {
-      const res = await api<{ contactLoginCreated: boolean; contactEmail: string; tempPassword?: string }>(`/vendors/${v.id}/approve`, { method: "POST" });
-      setApproval({ name: v.name, email: res.contactEmail, tempPassword: res.tempPassword, created: res.contactLoginCreated });
+      const res = await api<{ contactLoginCreated: boolean; contactLoginSkippedReason?: string; contactEmail: string; tempPassword?: string }>(`/vendors/${v.id}/approve`, { method: "POST" });
+      setApproval({ name: v.name, email: res.contactEmail, tempPassword: res.tempPassword, created: res.contactLoginCreated, skippedReason: res.contactLoginSkippedReason });
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to approve vendor");
@@ -160,7 +168,7 @@ export default function VendorsPage() {
               )}
             </p>
           ) : (
-            <p className="mt-1">A user with that email already exists, so no new login was created.</p>
+            <p className="mt-1">{approval.skippedReason ?? "A user with that email already exists, so no new login was created."}</p>
           )}
           <button onClick={() => setApproval(null)} className="mt-2 text-xs text-green-700 underline">Dismiss</button>
         </div>
@@ -204,7 +212,7 @@ export default function VendorsPage() {
             render: (v) => (
               <>
                 <div>{v.contactName}</div>
-                <div className="text-xs text-gray-400">{v.contactEmail}{v.contactPhone ? ` · ${v.contactPhone}` : ""}</div>
+                <div className="text-xs text-gray-400">{emailWithMobile(v.contactEmail, v.contactPhone)}</div>
               </>
             ),
           },
@@ -294,12 +302,10 @@ export default function VendorsPage() {
                 <span className="label">Email</span>
                 <span className="value truncate">{v.contactEmail}</span>
               </div>
-              {v.contactPhone && (
-                <div className="data-card-row">
-                  <span className="label">Phone</span>
-                  <span className="value">{v.contactPhone}</span>
-                </div>
-              )}
+              <div className="data-card-row">
+                <span className="label">Phone</span>
+                <span className="value">{mobileOrNone(v.contactPhone)}</span>
+              </div>
               <div className="data-card-row">
                 <span className="label">Engineers</span>
                 <span className="value">{v._count.members}</span>
@@ -370,7 +376,7 @@ export default function VendorsPage() {
                 <input required placeholder="Contact name" className="field" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
                 <input required type="email" placeholder="Contact email (login)" className="field" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} />
               </div>
-              <input placeholder="Contact phone (optional)" className="field w-full" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
+              <input required inputMode="tel" title="10-digit Indian mobile number" placeholder="Contact mobile" className="field w-full" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
               <p className="text-[11px] text-gray-400">Added directly by staff, this vendor is approved immediately - no due-diligence review needed. Their contact gets an erection-engineer login right away.</p>
 
               {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}

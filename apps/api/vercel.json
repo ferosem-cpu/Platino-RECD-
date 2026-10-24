@@ -15,6 +15,14 @@
     {
       "path": "/complaints/cron/escalate",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/reminders/cron/run",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/warranty/cron/send-reminders",
+      "schedule": "30 4 * * *"
     }
   ]
 }

@@ -4,7 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { mobileOrNone } from "@/lib/contactDisplay";
 import { useAuth } from "@/components/AuthContext";
+import { apiErrorMessage } from "@/lib/apiError";
+import { formatOptionalDate, formatOptionalRupees } from "@/lib/format";
 
 interface OtherSite {
   id: string;
@@ -20,8 +23,8 @@ interface OrderDetail {
   id: string;
   orderNumber: string;
   quantity: number;
-  value: string;
-  orderDate: string;
+  value: string | null;
+  orderDate: string | null;
   promisedDeliveryDate: string | null;
   actualDispatchDate: string | null;
   plannedExhaustHookupType: string | null;
@@ -101,7 +104,7 @@ export default function OrderDetailPage() {
       setPendingSerials((p) => ({ ...p, [unitId]: "" }));
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save serial number");
+      setError(apiErrorMessage(err, "Failed to save serial number"));
     } finally {
       setSavingUnitId(null);
     }
@@ -122,7 +125,7 @@ export default function OrderDetailPage() {
           </div>
           <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{order.orderNumber}</h1>
           <p className="text-sm text-gray-500">
-            {order.customer.name} · Placed {new Date(order.orderDate).toLocaleDateString()}
+            {order.customer.name} · Placed {formatOptionalDate(order.orderDate)}
             {order.salesEngineer && <> · Sales: {order.salesEngineer.name}</>}
           </p>
         </div>
@@ -148,7 +151,7 @@ export default function OrderDetailPage() {
           {order.customer.gstin && <p className="text-xs text-gray-400">GSTIN: {order.customer.gstin}</p>}
           {contact && (
             <p className="text-xs text-gray-500 pt-1">
-              Contact: {contact.name}{contact.phone && <> · {contact.phone}</>}{contact.email && <> · {contact.email}</>}
+              Contact: {contact.name} · {mobileOrNone(contact.phone)}{contact.email && <> · {contact.email}</>}
             </p>
           )}
         </section>
@@ -163,7 +166,7 @@ export default function OrderDetailPage() {
           </div>
           <div className="data-card-row">
             <span className="label">Order value</span>
-            <span className="value font-semibold">₹{Number(order.value).toLocaleString("en-IN")}</span>
+            <span className="value font-semibold">{formatOptionalRupees(order.value)}</span>
           </div>
           {order.lineItems.length > 0 && (
             <div className="pt-2 border-t border-gray-100 space-y-1">
@@ -181,7 +184,7 @@ export default function OrderDetailPage() {
           <h2 className="text-sm font-semibold">Dates</h2>
           <div className="data-card-row">
             <span className="label">Order date</span>
-            <span className="value">{new Date(order.orderDate).toLocaleDateString()}</span>
+            <span className="value">{formatOptionalDate(order.orderDate)}</span>
           </div>
           <div className="data-card-row">
             <span className="label">Promised delivery</span>

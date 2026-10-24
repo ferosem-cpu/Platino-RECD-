@@ -4,6 +4,7 @@
  */
 import { PERMISSION_KEY } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
+import { SITE_PEOPLE_INCLUDE } from "../../lib/safeSelect";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 // No quotation/invoice/purchase_order/expense/work_order here - those are finance-module
@@ -51,7 +52,7 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
         include: {
           customer: true, product: true, salesEngineer: { select: { name: true } },
           lineItems: { include: { product: true } },
-          site: { include: { currentStage: true, assignedEngineer: { select: { name: true } }, vendor: true } },
+          site: { include: SITE_PEOPLE_INCLUDE },
         },
       });
       if (auth.customerId && order && order.customerId !== auth.customerId) return forbidden("orders");
@@ -64,13 +65,14 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
         !auth.permissions.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS)
       )
         return forbidden("complaints");
-      return prisma.complaint.findUnique({
+      const ticket = await prisma.complaint.findUnique({
         where: { id },
         include: {
           customer: { select: { name: true } }, site: { select: { address: true } },
           assignedTo: { select: { name: true } },
         },
       });
+      return ticket?.archivedAt ? null : ticket; // archived tickets are out of every working view
   }
 }
 

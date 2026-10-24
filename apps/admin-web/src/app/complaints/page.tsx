@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import TicketContacts from "@/components/TicketContacts";
+import { mobileOrNone, type TicketContactInfo } from "@/lib/contactDisplay";
 import { useAuth } from "@/components/AuthContext";
+import Link from "next/link";
 import { COMPLAINT_STATUS } from "@recd/shared";
+import { isReadOnlyForUser, statusChoices, ticketFormProblem } from "@/lib/ticketForm";
 
 interface ComplaintRow {
   id: string;
@@ -18,6 +23,7 @@ interface ComplaintRow {
   serviceReportUrl: string | null;
   attachmentUrl: string | null;
   createdAt: string;
+  archivedAt?: string | null;
   assignedTo: { id: string; name: string } | null;
   site: { order: { customer: { name: string } } } | null;
   unit?: { id: string; serialNo: string | null } | null;
@@ -25,6 +31,8 @@ interface ComplaintRow {
   reporterName?: string | null;
   reporterPhone?: string | null;
   reporterType?: string | null;
+  /** Who to call about this ticket - only sent to roles that may see contact numbers. */
+  contactInfo?: TicketContactInfo;
   slaEscalationLevel?: number;
   /** null on tickets that predate SLA tracking (their level was pre-set to avoid an alert flood). */
   lastEscalatedAt?: string | null;
@@ -38,13 +46,23 @@ interface TicketEvent {
   actorLabel: string | null;
   actor: { name: string } | null;
   createdAt: string;
+  detail?: { reason?: string; transition?: string; fields?: string[] } | null;
 }
 
 function eventText(e: TicketEvent): string {
   const p = (v: string | null) => (v ?? "—").replace(/_/g, " ");
   if (e.type === "created") return "Ticket raised";
-  if (e.type === "status_changed") return `Status: ${p(e.fromValue)} → ${p(e.toValue)}`;
+  if (e.type === "status_changed") return `Status: ${p(e.fromValue)} → ${p(e.toValue)}${e.detail?.transition === "reopened" ? ` (reopened - closure date cleared${e.detail?.reason ? `; reason: ${String(e.detail.reason)}` : ""})` : ""}`;
+  if (e.type === "notes_updated") return `Notes updated${e.detail?.fields?.length ? `: ${e.detail.fields.map((f) => f.replace(/([A-Z])/g, " $1").toLowerCase()).join(", ")}` : ""}`;
+  if (e.type === "restored") return `Ticket restored from the archive${e.detail?.reason ? ` (${String(e.detail.reason)})` : ""}`;
+  if (e.type === "archived") return `Ticket archived${e.detail?.reason ? ` (${String(e.detail.reason)})` : ""}`;
+  if (e.type === "escalation_failed") return `${e.toValue === "2" ? "Management" : "Regional Manager"} escalation NOT delivered (${e.detail?.reason === "no_recipient" ? "no one to notify" : "delivery failed"}) - it will be retried`;
+  if (e.type === "notification_gap") return `Not every intended person could be notified when this was raised: ${e.detail?.reason === "site_has_no_region" ? "the site has no region, so no Regional Manager was told" : e.detail?.reason === "region_has_no_regional_manager" ? "the site's region has no Regional Manager" : "nobody could be notified"}`;
   if (e.type === "assigned") return e.toValue ? "Assigned to an engineer" : "Unassigned";
+  if (e.type === "service_report_created") return "Service report started";
+  if (e.type === "service_report_submitted") return "Service report sent for customer signature";
+  if (e.type === "service_report_reopened") return "Service report taken back to draft";
+  if (e.type === "service_report_signed") return "Service report signed by the customer";
   if (e.type === "escalated") return e.toValue === "2" ? "Escalated to Management (SLA)" : "Escalated to Regional Manager (SLA)";
   return e.type;
 }
@@ -93,7 +111,6 @@ interface Overview {
   countsByStatus: Record<string, number>;
 }
 
-const STATUS_VALUES = Object.values(COMPLAINT_STATUS);
 
 /** Display-only label overrides - underlying status keys are unchanged. */
 const STATUS_LABEL_OVERRIDES: Record<string, string> = {
@@ -135,28 +152,43 @@ export default function ComplaintsPage() {
 
   // Editor modal
   const [editing, setEditing] = useState<ComplaintRow | null>(null);
-  const [form, setForm] = useState({ status: "", rootCause: "", resolutionNotes: "", remarks: "", assignedToId: "" });
+  const [form, setForm] = useState({ status: "", rootCause: "", resolutionNotes: "", remarks: "", assignedToId: "", reopenReason: "" });
+  const [showArchived, setShowArchived] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [serviceReportFile, setServiceReportFile] = useState<File | null>(null);
 
   function load() {
-    api<ComplaintRow[]>("/complaints").then(setComplaints).catch(() => {});
+    api<ComplaintRow[]>(showArchived && canManage ? "/complaints?includeArchived=1" : "/complaints").then(setComplaints).catch(() => {});
     api<Overview>("/complaints/overview").then(setOverview).catch(() => setOverview(null));
-    if (canManage) api<Assignee[]>("/complaints/assignees").then(setAssignees).catch(() => {});
   }
 
-  useEffect(load, [canManage]);
+  useEffect(load, [canManage, showArchived]);
+
+  async function restore(c: ComplaintRow) {
+    const reason = prompt(`Restore ${c.ticketNumber} to the working lists? Optionally say why:`);
+    if (reason === null) return;
+    setRestoringId(c.id);
+    try {
+      await api(`/complaints/${c.id}/restore`, { method: "POST", body: JSON.stringify({ reason: reason || undefined }) });
+      load();
+    } catch (err) {
+      setError(apiErrorMessage(err, "Failed to restore the ticket"));
+    } finally {
+      setRestoringId(null);
+    }
+  }
 
   async function rejectOrDelete(c: ComplaintRow) {
-    if (!confirm(`Remove complaint ${c.ticketNumber}? This is for spam or wrong-RECD-serial-number entries and cannot be undone.`)) return;
+    if (!confirm(`Remove complaint ${c.ticketNumber}? This is for spam or wrong-RECD-serial-number entries. The ticket is archived: it leaves the working lists, but the ticket and its full history are kept.`)) return;
     setDeletingId(c.id);
     try {
       await api(`/complaints/${c.id}`, { method: "DELETE" });
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete complaint");
+      setError(apiErrorMessage(err, "Failed to delete complaint"));
     } finally {
       setDeletingId(null);
     }
@@ -164,6 +196,8 @@ export default function ComplaintsPage() {
 
   function openEditor(c: ComplaintRow) {
     setEditing(c);
+    // The people valid for THIS ticket (a vendor's engineers are only offered for that vendor's sites).
+    if (canManage) api<Assignee[]>(`/complaints/assignees?ticketId=${encodeURIComponent(c.id)}`).then(setAssignees).catch(() => setAssignees([]));
     setEditError(null);
     setServiceReportFile(null);
     setForm({
@@ -172,17 +206,24 @@ export default function ComplaintsPage() {
       resolutionNotes: c.resolutionNotes ?? "",
       remarks: c.remarks ?? "",
       assignedToId: c.assignedTo?.id ?? "",
+      reopenReason: "",
     });
   }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!editing) return;
+    const problem = ticketFormProblem(editing.status, form, canManage, editing.resolutionNotes);
+    if (problem) {
+      setEditError(problem);
+      return;
+    }
     setSaving(true);
     setEditError(null);
     try {
       const body: Record<string, unknown> = {
         status: form.status,
+        ...(editing.status === "closed" && form.status !== "closed" ? { reopenReason: form.reopenReason.trim() } : {}),
         rootCause: form.rootCause || undefined,
         resolutionNotes: form.resolutionNotes || undefined,
         remarks: form.remarks || undefined,
@@ -193,7 +234,7 @@ export default function ComplaintsPage() {
       setEditing(null);
       load();
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Failed to update complaint");
+      setEditError(apiErrorMessage(err, "Failed to update complaint"));
     } finally {
       setSaving(false);
     }
@@ -237,6 +278,11 @@ export default function ComplaintsPage() {
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       {/* Desktop table */}
+      {canManage && (
+        <label className="flex items-center gap-2 text-xs text-gray-600" data-testid="show-archived">
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Also show archived tickets (they can be restored)
+        </label>
+      )}
       <div className="card overflow-hidden table-desktop">
         <div className="table-scroll">
           <table className="w-full border-collapse text-sm">
@@ -265,7 +311,7 @@ export default function ComplaintsPage() {
                     )}
                     {c.source === "public" && (
                       <div className="text-[11px] text-amber-700">
-                        Public · {c.reporterName} ({pretty(c.reporterType ?? "")}) {c.reporterPhone}
+                        Public · {c.reporterName} ({pretty(c.reporterType ?? "")}) · {mobileOrNone(c.contactInfo?.reporter?.phone ?? c.reporterPhone)}
                       </div>
                     )}
                   </td>
@@ -279,13 +325,25 @@ export default function ComplaintsPage() {
                   <td className="px-4 py-3 text-gray-600">{c.assignedTo?.name ?? "Unassigned"}</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-2">
+                      {c.archivedAt ? (
+                        <button onClick={() => restore(c)} disabled={restoringId === c.id} data-testid={`restore-${c.ticketNumber}`} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 disabled:opacity-50">
+                          {restoringId === c.id ? "Restoring…" : "Restore archived"}
+                        </button>
+                      ) : (
                       <button
                         onClick={() => openEditor(c)}
                         className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
                       >
                         {canManage ? "Manage" : "Update"}
                       </button>
-                      {canManage && (
+                      )}
+                      <Link
+                        href={`/service-reports?complaintId=${c.id}`}
+                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
+                      >
+                        Service reports
+                      </Link>
+                      {canManage && !c.archivedAt && (
                         <button
                           onClick={() => rejectOrDelete(c)}
                           disabled={deletingId === c.id}
@@ -338,7 +396,18 @@ export default function ComplaintsPage() {
                 >
                   {canManage ? "Manage" : "Update"}
                 </button>
-                {canManage && (
+                <Link
+                  href={`/service-reports?complaintId=${c.id}`}
+                  className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-center text-xs font-semibold hover:bg-gray-50"
+                >
+                  Service reports
+                </Link>
+                {canManage && c.archivedAt && (
+                  <button onClick={() => restore(c)} disabled={restoringId === c.id} data-testid={`restore-card-${c.ticketNumber}`} className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-50 disabled:opacity-50">
+                    {restoringId === c.id ? "Restoring…" : "Restore archived"}
+                  </button>
+                )}
+                {canManage && !c.archivedAt && (
                   <button
                     onClick={() => rejectOrDelete(c)}
                     disabled={deletingId === c.id}
@@ -373,6 +442,8 @@ export default function ComplaintsPage() {
               </a>
             )}
 
+            <TicketContacts info={editing.contactInfo} />
+
             <TicketHistory id={editing.id} />
 
             <form onSubmit={save} className="space-y-4">
@@ -384,11 +455,25 @@ export default function ComplaintsPage() {
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value })}
                   >
-                    {STATUS_VALUES.map((s) => (
-                      <option key={s} value={s}>{pretty(s)}</option>
+                    {statusChoices(editing.status, canManage).map((o) => (
+                      // Only the statuses the workflow allows next are offered (shared/ticketPolicy.ts; the API enforces it). Final closure and reopening
+                      // are for ticket managers; a closed ticket is read-only for everyone else.
+                      <option key={o.value} value={o.value} disabled={o.disabled}>{pretty(o.value)}</option>
                     ))}
                   </select>
+                  {isReadOnlyForUser(editing.status, canManage) && (
+                    <p className="mt-1 text-[11px] text-gray-500" data-testid="reopen-manager-only">This ticket is closed. Only a ticket manager can reopen it or add notes to it.</p>
+                  )}
+                  {editing.status === "closed" && form.status !== "closed" && (
+                    <p className="mt-1 text-[11px] text-amber-700" data-testid="reopen-note">Reopening this ticket clears its closure date; the history keeps when it was closed.</p>
+                  )}
                 </div>
+                {editing.status === "closed" && form.status !== "closed" && (
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Reason for reopening (required)</label>
+                    <textarea rows={2} className="field w-full" data-testid="reopen-reason" value={form.reopenReason} onChange={(e) => setForm({ ...form, reopenReason: e.target.value })} placeholder="Why is this closed ticket being reopened?" />
+                  </div>
+                )}
                 {canManage && (
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">Assign to</label>
@@ -414,7 +499,7 @@ export default function ComplaintsPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Resolution notes</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Resolution notes{form.status === "resolved" ? " (required to resolve)" : ""}</label>
                 <textarea
                   rows={3}
                   className="field w-full"
@@ -452,7 +537,7 @@ export default function ComplaintsPage() {
 
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setEditing(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
-                <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">{saving ? "Saving…" : "Save"}</button>
+                <button type="submit" disabled={saving || isReadOnlyForUser(editing.status, canManage)} className="btn-primary px-4 py-2 text-sm">{saving ? "Saving…" : "Save"}</button>
               </div>
             </form>
           </div>

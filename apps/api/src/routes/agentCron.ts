@@ -3,25 +3,30 @@
  * storage/costs bounded). Invoked by Vercel Cron
  * (see the `crons` entry in vercel.json), which sends `Authorization: Bearer $CRON_SECRET`
  * automatically when CRON_SECRET is set as a project env var - this route rejects anything
- * else so it can't be triggered by an arbitrary request.
+ * else (including every request when CRON_SECRET is not set) so it can't be triggered by an arbitrary request.
  */
 import { Router } from "express";
+import { timingSafeEqual } from "crypto";
 import { prisma } from "../lib/prisma";
 
 export const agentCronRouter = Router();
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-agentCronRouter.get("/cron/cleanup-conversations", async (req, res) => {
+/** True only for `Authorization: Bearer <CRON_SECRET>` (compared in constant time). An unset or empty secret never matches anything. */
+function isAuthorisedCron(header: string | undefined): boolean {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const header = req.headers.authorization;
-    if (header !== `Bearer ${secret}`) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+  if (!secret || !header) return false;
+  const actual = Buffer.from(header);
+  const expected = Buffer.from(`Bearer ${secret}`);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+agentCronRouter.get("/cron/cleanup-conversations", async (req, res) => {
+  // Fails closed: with no CRON_SECRET configured (or a wrong one) nothing is deleted - the same rule as the other cron routes.
+  if (!isAuthorisedCron(req.headers.authorization)) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-  // No CRON_SECRET set (e.g. local dev) - allow it through rather than permanently locking
-  // the route out; production should always have CRON_SECRET set once this is deployed.
 
   const cutoff = new Date(Date.now() - THIRTY_DAYS_MS);
   const result = await prisma.agentConversation.deleteMany({

@@ -1,6 +1,7 @@
-import React, { useState } from "react";
-import { View, Text, TextInput, Pressable, StyleSheet, Alert } from "react-native";
-import { COMPLAINT_CATEGORY } from "@recd/shared";
+import React, { useEffect, useState } from "react";
+import { View, Text, TextInput, Pressable, StyleSheet, Alert, ScrollView, Image } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { COMPLAINT_CATEGORY, buildComplaintBody, eligibleComplaintUnits, requiresUnitSelection } from "@recd/shared";
 import { api } from "@/lib/apiClient";
 
 const CATEGORIES: Array<{ key: string; label: string }> = [
@@ -10,33 +11,107 @@ const CATEGORIES: Array<{ key: string; label: string }> = [
 ];
 const SEVERITIES = ["low", "medium", "high", "critical"] as const;
 
+interface SiteUnit {
+  id: string;
+  serialNo: string | null;
+  status: string;
+  product: { name: string; model: string };
+}
+
+/** The API client throws JSON-quoted error strings; show them as plain sentences. */
+function readableError(err: unknown): string | undefined {
+  if (!(err instanceof Error)) return undefined;
+  try {
+    const parsed = JSON.parse(err.message);
+    if (typeof parsed === "string") return parsed;
+  } catch {
+    // already plain text
+  }
+  return err.message;
+}
+
 export default function RaiseComplaintScreen({ route, navigation }: { route: any; navigation: any }) {
   const { siteId } = route.params as { siteId: string };
   const [category, setCategory] = useState(CATEGORIES[0].key);
   const [severity, setSeverity] = useState<typeof SEVERITIES[number]>("medium");
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [units, setUnits] = useState<SiteUnit[]>([]);
+  const [unitId, setUnitId] = useState<string | null>(null);
+  // Photo of the RECD / DG name plate - mandatory, same as the web portal's complaint form.
+  const [photo, setPhoto] = useState<{ uri: string; dataUrl: string } | null>(null);
+
+  useEffect(() => {
+    api<{ units: SiteUnit[] }>(`/sites/${siteId}`)
+      .then((site) => setUnits(eligibleComplaintUnits(site.units)))
+      .catch(() => setUnits([]));
+  }, [siteId]);
+
+  async function takePhoto() {
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.4, base64: true });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    if (!asset.base64) {
+      Alert.alert("Could not read the photo", "Please try again.");
+      return;
+    }
+    setPhoto({ uri: asset.uri, dataUrl: `data:${asset.mimeType ?? "image/jpeg"};base64,${asset.base64}` });
+  }
 
   async function submit() {
     if (description.trim().length === 0) {
       Alert.alert("Please describe the issue");
       return;
     }
+    // With several RECDs at the site the ticket has to name the serial it is about; with one the
+    // API ties it to that RECD itself.
+    if (requiresUnitSelection(units) && !unitId) {
+      Alert.alert("Select the RECD serial number this complaint is about");
+      return;
+    }
+    if (!photo) {
+      Alert.alert("Please attach a photo of the RECD & DG name plate");
+      return;
+    }
     setSubmitting(true);
     try {
-      await api("/complaints", { method: "POST", body: JSON.stringify({ siteId, category, description, severity }) });
+      await api("/complaints", {
+        method: "POST",
+        body: JSON.stringify(
+          buildComplaintBody({ siteId, unitId, category, description, severity, attachmentUrl: photo.dataUrl }),
+        ),
+      });
       Alert.alert("Complaint submitted", "Our service team will get back to you.", [
         { text: "OK", onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
-      Alert.alert("Could not submit complaint", err instanceof Error ? err.message : undefined);
+      Alert.alert("Could not submit complaint", readableError(err));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container}>
+      {units.length > 0 && (
+        <>
+          <Text style={styles.section}>RECD serial number{requiresUnitSelection(units) ? " *" : ""}</Text>
+          <View style={styles.chipRow}>
+            {units.map((u) => (
+              <Pressable
+                key={u.id}
+                style={[styles.chip, unitId === u.id && styles.chipSelected]}
+                onPress={() => setUnitId(u.id)}
+              >
+                <Text style={[styles.chipText, unitId === u.id && styles.chipTextSelected]}>
+                  {u.serialNo ?? "Serial not recorded"} · {u.product.model}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      )}
+
       <Text style={styles.section}>Category</Text>
       <View style={styles.chipRow}>
         {CATEGORIES.map((c) => (
@@ -72,10 +147,16 @@ export default function RaiseComplaintScreen({ route, navigation }: { route: any
         onChangeText={setDescription}
       />
 
+      <Text style={styles.section}>Photo of RECD & DG name plate *</Text>
+      <Pressable style={styles.photoButton} onPress={takePhoto}>
+        <Text style={styles.photoButtonText}>{photo ? "Retake photo" : "Take photo"}</Text>
+      </Pressable>
+      {photo && <Image source={{ uri: photo.uri }} style={styles.photoPreview} />}
+
       <Pressable style={styles.button} onPress={submit} disabled={submitting}>
         <Text style={styles.buttonText}>{submitting ? "Submitting..." : "Submit complaint"}</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -95,6 +176,9 @@ const styles = StyleSheet.create({
     minHeight: 100,
     textAlignVertical: "top",
   },
+  photoButton: { borderWidth: 1, borderColor: "#d1d5db", borderRadius: 8, padding: 12, alignItems: "center" },
+  photoButtonText: { color: "#111827", fontWeight: "600" },
+  photoPreview: { width: 160, height: 120, borderRadius: 8, marginTop: 10 },
   button: { backgroundColor: "#111827", borderRadius: 8, padding: 14, alignItems: "center", marginTop: 24 },
   buttonText: { color: "#fff", fontWeight: "600" },
 });

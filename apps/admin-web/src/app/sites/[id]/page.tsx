@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { NO_MOBILE_LABEL, mobileOrNone } from "@/lib/contactDisplay";
+import { apiErrorMessage } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
 import { useAuth } from "@/components/AuthContext";
+import { canOverrideDuplicatePo } from "@recd/shared";
 
 interface Lookup {
   id: string;
@@ -47,6 +51,9 @@ interface SiteDetail {
   id: string;
   address: string | null;
   companyName: string | null;
+  /** The person at the site, captured by the customer in the portal (Site.sitePocName / sitePocNumber). */
+  sitePocName: string | null;
+  sitePocNumber: string | null;
   gpsLat: string | null;
   gpsLng: string | null;
   confirmedExhaustHookupType: string | null;
@@ -57,6 +64,8 @@ interface SiteDetail {
   order: {
     id: string;
     orderNumber: string;
+    poNumber: string | null;
+    poDuplicateFlag: boolean;
     plannedExhaustHookupType: string | null;
     customer: { name: string };
     quantity: number;
@@ -112,7 +121,8 @@ function fileToDataUrl(file: File): Promise<string> {
 export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  const canOverridePo = canOverrideDuplicatePo(user?.role.key);
   const canEdit = hasPermission("change_site_status");
   const canAssignVendor = hasPermission("manage_vendors");
   const canManageOrders = hasPermission("manage_orders");
@@ -178,6 +188,9 @@ export default function SiteDetailPage() {
   const [unitProductId, setUnitProductId] = useState("");
   const [unitQuantity, setUnitQuantity] = useState("1");
   const [unitMode, setUnitMode] = useState<"same_order" | "separate_order">("same_order");
+  // A separate (cloned) order is checked against the duplicate-PO rule like any new order: blank = the source order's PO.
+  const [clonePo, setClonePo] = useState("");
+  const [cloneAllowDuplicate, setCloneAllowDuplicate] = useState(false);
   const [addingUnit, setAddingUnit] = useState(false);
   const [removingLineItemId, setRemovingLineItemId] = useState<string | null>(null);
   const [unitSerials, setUnitSerials] = useState<string[]>([""]);
@@ -362,12 +375,17 @@ export default function SiteDetailPage() {
   async function addContact(e: React.FormEvent) {
     e.preventDefault();
     if (!contactName.trim()) return;
-    setAddingContact(true);
     setError(null);
+    const phoneError = mobileFieldError(contactPhone);
+    if (phoneError) {
+      setError(phoneError);
+      return;
+    }
+    setAddingContact(true);
     try {
       await api(`/sites/${id}/contacts`, {
         method: "POST",
-        body: JSON.stringify({ name: contactName, phone: contactPhone || undefined, role: contactRole || undefined }),
+        body: JSON.stringify({ name: contactName, phone: cleanMobile(contactPhone), role: contactRole || undefined }),
       });
       setContactName("");
       setContactPhone("");
@@ -375,7 +393,7 @@ export default function SiteDetailPage() {
       flash("Contact added.");
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add contact");
+      setError(apiErrorMessage(err, "Failed to add contact"));
     } finally {
       setAddingContact(false);
     }
@@ -477,7 +495,13 @@ export default function SiteDetailPage() {
       } else {
         const newOrder = await api<{ orderNumber: string; site: { id: string } }>(`/sites/${id}/clone-order`, {
           method: "POST",
-          body: JSON.stringify({ productId: unitProductId, quantity, recdSerials }),
+          body: JSON.stringify({
+            productId: unitProductId,
+            quantity,
+            recdSerials,
+            poNumber: clonePo.trim() || undefined,
+            allowDuplicatePo: (canOverridePo && cloneAllowDuplicate) || undefined,
+          }),
         });
         router.push(`/sites/${newOrder.site.id}`);
       }
@@ -526,7 +550,11 @@ export default function SiteDetailPage() {
         <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>
           {site.companyName ?? "Unnamed site"}
         </h1>
-        <p className="text-sm text-gray-500 font-mono text-xs">{site.order.orderNumber}</p>
+        <p className="text-sm text-gray-500 font-mono text-xs">
+          {site.order.orderNumber}
+          <span data-testid="site-po"> &middot; PO {site.order.poNumber ?? "-"}</span>
+          {site.order.poDuplicateFlag && <span className="badge badge-accent ml-2" title="Created as a duplicate PO by an admin">duplicate PO</span>}
+        </p>
         <p className="text-sm text-gray-500">
           {site.order.customer.name} · {site.address ?? "No address on file"}
         </p>
@@ -629,6 +657,19 @@ export default function SiteDetailPage() {
         )}
       </section>
 
+      <section className="card p-5 space-y-2" data-testid="site-poc">
+        <h2 className="text-sm font-semibold">Site POC</h2>
+        {site.sitePocName || site.sitePocNumber ? (
+          <p className="text-sm">
+            <span className="font-medium">{site.sitePocName ?? "Name not on file"}</span>
+            <span className={site.sitePocNumber?.trim() ? "text-gray-600" : "text-amber-600"}> · {mobileOrNone(site.sitePocNumber)}</span>
+          </p>
+        ) : (
+          <p className="text-sm text-gray-400">No site POC has been entered yet. {NO_MOBILE_LABEL}.</p>
+        )}
+        <p className="text-[11px] text-gray-400">Entered by the customer in the portal (Company details).</p>
+      </section>
+
       <section className="card p-5 space-y-3">
         <h2 className="text-sm font-semibold">Site contacts</h2>
         <ul className="space-y-2">
@@ -637,7 +678,7 @@ export default function SiteDetailPage() {
               <div>
                 <span className="font-medium">{c.name}</span>
                 {c.role && <span className="text-gray-500"> · {c.role}</span>}
-                {c.phone && <span className="text-gray-500"> · {c.phone}</span>}
+                <span className={c.phone?.trim() ? "text-gray-500" : "text-amber-600"}> · {mobileOrNone(c.phone)}</span>
                 {c.email && <span className="text-gray-500"> · {c.email}</span>}
               </div>
               {canEdit && (
@@ -658,7 +699,10 @@ export default function SiteDetailPage() {
               onChange={(e) => setContactName(e.target.value)}
             />
             <input
-              placeholder="Phone"
+              required
+              inputMode="tel"
+              title="10-digit Indian mobile number"
+              placeholder="Mobile number"
               className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
               value={contactPhone}
               onChange={(e) => setContactPhone(e.target.value)}
@@ -832,6 +876,24 @@ export default function SiteDetailPage() {
                 Create as a separate order
               </label>
             </div>
+            {unitMode === "separate_order" && (
+              <div className="space-y-2 text-sm" data-testid="clone-po-fields">
+                <input
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  placeholder={`PO number (blank = ${site.order.poNumber ?? "same as this order"})`}
+                  value={clonePo}
+                  onChange={(e) => setClonePo(e.target.value)}
+                  data-testid="clone-po-number"
+                />
+                <p className="text-xs text-gray-500">A PO already used by this customer is refused, as when creating any order.</p>
+                {canOverridePo && (
+                  <label className="flex items-center gap-2 text-xs text-gray-500">
+                    <input type="checkbox" data-testid="clone-allow-duplicate-po" checked={cloneAllowDuplicate} onChange={(e) => setCloneAllowDuplicate(e.target.checked)} />
+                    Allow a duplicate PO for this customer (the order is flagged)
+                  </label>
+                )}
+              </div>
+            )}
             <button type="submit" disabled={addingUnit || !unitProductId} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
               {addingUnit ? "Adding…" : "+ Add another unit"}
             </button>

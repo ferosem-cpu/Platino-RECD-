@@ -4,11 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { mobileOrNone } from "@/lib/contactDisplay";
 import { useAuth } from "@/components/AuthContext";
 
 interface CustomerSite {
   id: string;
   orderNumber: string;
+  poNumber: string | null;
+  poDuplicateFlag: boolean;
   product: { name: string; model: string };
   site: {
     id: string;
@@ -101,7 +104,7 @@ export default function CustomerDetailPage() {
         <p className="text-sm text-gray-500 whitespace-pre-line">{customer.address ?? "No address on file"}</p>
         {contact && (
           <p className="text-xs text-gray-500 pt-1">
-            Contact: {contact.name}{contact.phone && <> · {contact.phone}</>}{contact.email && <> · {contact.email}</>}
+            Contact: {contact.name} · {mobileOrNone(contact.phone)}{contact.email && <> · {contact.email}</>}
           </p>
         )}
       </section>
@@ -127,6 +130,10 @@ export default function CustomerDetailPage() {
                   {o.site && <span className="badge badge-accent">{o.site.currentStage.label}</span>}
                 </div>
                 <p className="text-xs text-gray-500 mb-1">{o.product.name} ({o.product.model})</p>
+                <p className="text-xs text-gray-500 mb-1" data-testid="order-po">
+                  PO: <span className="font-mono">{o.poNumber ?? "-"}</span>
+                  {o.poDuplicateFlag && <span className="badge badge-accent ml-1" title="Created as a duplicate PO by an admin">duplicate PO</span>}
+                </p>
                 {o.site ? (
                   <>
                     <p className="text-sm font-semibold text-gray-900 truncate">{o.site.companyName ?? "Unnamed site"}</p>

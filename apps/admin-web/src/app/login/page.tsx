@@ -3,7 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import Script from "next/script";
 import { useAuth } from "@/components/AuthContext";
-import { api } from "@/lib/apiClient";
+import { api, ApiRequestError } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
+import {
+  LOGIN_OTP_POLICY,
+  canResend,
+  otpErrorText,
+  otpExpiryText,
+  otpRequestedNotice,
+  resendLabel,
+  tickCooldown,
+  type OtpRequestResult,
+} from "@recd/shared";
 
 declare global {
   interface Window {
@@ -29,8 +41,8 @@ export default function LoginPage() {
   const [activeTab, setActiveTab] = useState<Tab>("staff");
 
   // Staff Login State
-  const [email, setEmail] = useState("owner@platino.example");
-  const [password, setPassword] = useState("changeme123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [staffError, setStaffError] = useState<string | null>(null);
   const [staffLoading, setStaffLoading] = useState(false);
 
@@ -68,11 +80,21 @@ export default function LoginPage() {
   }, [activeTab]);
 
   // Customer Login State
-  const [orderNumber, setOrderNumber] = useState("ORD-2026-0001");
-  const [phone, setPhone] = useState("+919900011122");
+  const [orderNumber, setOrderNumber] = useState("");
+  const [phone, setPhone] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otpMessage, setOtpMessage] = useState<string | null>(null);
+  // Resend cooldown (seconds left) and the notice the server's answer produced. The server enforces the
+  // cooldown and limits itself; this only mirrors them so the user is not left guessing.
+  const [cooldown, setCooldown] = useState(0);
+  const [otpNotice, setOtpNotice] = useState<string | null>(null);
+  const [expiresInSeconds, setExpiresInSeconds] = useState<number>(LOGIN_OTP_POLICY.EXPIRY_SECONDS);
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => tickCooldown(c)), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
   const [customerError, setCustomerError] = useState<string | null>(null);
   const [customerLoading, setCustomerLoading] = useState(false);
 
@@ -105,38 +127,59 @@ export default function LoginPage() {
     }
   }
 
-  async function handleCustomerRequestOtp(e: React.FormEvent) {
-    e.preventDefault();
-    setCustomerLoading(true);
+  async function requestCustomerOtp() {
     setCustomerError(null);
     setOtpMessage(null);
+    const phoneError = mobileFieldError(phone);
+    if (phoneError) {
+      setCustomerError(phoneError);
+      return;
+    }
+    setCustomerLoading(true);
     try {
-      const result = await api<{ ok: boolean; message: string; devCode?: string }>("/auth/customer/register", {
+      const result = await api<OtpRequestResult & { ok: boolean; devCode?: string }>("/auth/customer/register", {
         method: "POST",
-        body: JSON.stringify({ orderNumber, phone }),
+        body: JSON.stringify({ orderNumber, phone: cleanMobile(phone) }),
       });
       setOtpSent(true);
-      // In production the code only arrives by email; in dev the API echoes it back so we can test.
+      setCooldown(result.resendAfterSeconds ?? LOGIN_OTP_POLICY.RESEND_COOLDOWN_SECONDS);
+      setExpiresInSeconds(result.expiresInSeconds ?? LOGIN_OTP_POLICY.EXPIRY_SECONDS);
+      setOtpNotice(otpRequestedNotice(result, LOGIN_OTP_POLICY.EXPIRY_SECONDS));
+      // Only present when the API runs in explicitly enabled local-development mode (nothing was sent).
       setOtpMessage(result.devCode ?? null);
     } catch (err) {
-      setCustomerError(err instanceof Error ? err.message : "Failed to send OTP");
+      const status = err instanceof ApiRequestError ? err.status : undefined;
+      const retryAfterSeconds = err instanceof ApiRequestError ? Number(err.body.retryAfterSeconds) || undefined : undefined;
+      if (status === 429 && retryAfterSeconds && retryAfterSeconds < 120) setCooldown(retryAfterSeconds);
+      setCustomerError(otpErrorText("request", { status, message: apiErrorMessage(err, ""), retryAfterSeconds }));
     } finally {
       setCustomerLoading(false);
     }
   }
 
+  async function handleCustomerRequestOtp(e: React.FormEvent) {
+    e.preventDefault();
+    await requestCustomerOtp();
+  }
+
   async function handleCustomerVerifyOtp(e: React.FormEvent) {
     e.preventDefault();
-    setCustomerLoading(true);
     setCustomerError(null);
+    const phoneError = mobileFieldError(phone);
+    if (phoneError) {
+      setCustomerError(phoneError);
+      return;
+    }
+    setCustomerLoading(true);
     try {
       const result = await api<{ token: string; user: { name: string; orderNumber: string } }>("/auth/customer/verify", {
         method: "POST",
-        body: JSON.stringify({ orderNumber, phone, code: otpCode }),
+        body: JSON.stringify({ orderNumber, phone: cleanMobile(phone), code: otpCode }),
       });
       await login(result.token, result.user.orderNumber);
     } catch (err) {
-      setCustomerError(err instanceof Error ? err.message : "OTP verification failed");
+      const status = err instanceof ApiRequestError ? err.status : undefined;
+      setCustomerError(otpErrorText("verify", { status, message: apiErrorMessage(err, ""), retryAfterSeconds: err instanceof ApiRequestError ? Number(err.body.retryAfterSeconds) || undefined : undefined }));
     } finally {
       setCustomerLoading(false);
     }
@@ -144,8 +187,13 @@ export default function LoginPage() {
 
   async function handleVendorRegister(e: React.FormEvent) {
     e.preventDefault();
-    setVendorLoading(true);
     setVendorError(null);
+    const phoneError = mobileFieldError(vendor.contactPhone);
+    if (phoneError) {
+      setVendorError(phoneError);
+      return;
+    }
+    setVendorLoading(true);
     try {
       await api("/vendors/register", {
         method: "POST",
@@ -153,13 +201,13 @@ export default function LoginPage() {
           name: vendor.name,
           contactName: vendor.contactName,
           contactEmail: vendor.contactEmail,
-          contactPhone: vendor.contactPhone || undefined,
+          contactPhone: cleanMobile(vendor.contactPhone),
           address: vendor.address || undefined,
         }),
       });
       setVendorDone(true);
     } catch (err) {
-      setVendorError(err instanceof Error ? err.message : "Registration failed");
+      setVendorError(apiErrorMessage(err, "Registration failed"));
     } finally {
       setVendorLoading(false);
     }
@@ -239,15 +287,15 @@ export default function LoginPage() {
               <form onSubmit={handleCustomerRequestOtp} className="space-y-4">
                 <div>
                   <label className={labelCls}>RECD Serial Number</label>
-                  <input type="text" required placeholder="e.g. ORD-2026-0001" className={inputCls} value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)} />
+                  <input type="text" required placeholder="RECD serial number or order number" className={inputCls} value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)} />
                 </div>
                 <div>
                   <label className={labelCls}>Phone Number</label>
                   <input
                     type="tel"
                     required
-                    pattern="^\+?[1-9]\d{7,14}$"
-                    title="Enter a valid mobile number"
+                    inputMode="tel"
+                    title="10-digit Indian mobile number"
                     placeholder="e.g. +919900011122"
                     className={inputCls}
                     value={phone}
@@ -255,24 +303,25 @@ export default function LoginPage() {
                   />
                 </div>
                 <p className="text-[11px] text-gray-400 -mt-2">
-                  A valid mobile number is required to receive the OTP. Only one complaint may be open against a
+                  The one-time code is sent by WhatsApp to the mobile number registered for this order. Only one complaint may be open against a
                   RECD serial number at a time.
                 </p>
                 {customerError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{customerError}</div>}
                 <button type="submit" disabled={customerLoading} className="btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-50">
-                  {customerLoading ? "Sending OTP..." : "Get One-Time Password"}
+                  {customerLoading ? "Sending code..." : "Send code to my mobile"}
                 </button>
               </form>
             ) : (
               <form onSubmit={handleCustomerVerifyOtp} className="space-y-4">
-                {otpMessage ? (
+                {otpMessage && (
                   <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-sm text-amber-800">
-                    <p className="font-medium">Dev mode - OTP (delivered by email in production):</p>
+                    <p className="font-medium">Development mode - nothing was sent to a phone. Code:</p>
                     <p className="mt-1 font-mono font-bold text-base tracking-wider">{otpMessage}</p>
                   </div>
-                ) : (
+                )}
+                {!otpMessage && otpNotice && (
                   <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-sm text-emerald-800">
-                    A 6-digit code has been sent to the email registered for this order.
+                    {otpNotice} Check WhatsApp on your registered mobile number.
                   </div>
                 )}
                 <div>
@@ -280,6 +329,17 @@ export default function LoginPage() {
                   <input type="text" required maxLength={6} placeholder="123456" className={`${inputCls} font-mono tracking-widest text-center`} value={otpCode} onChange={(e) => setOtpCode(e.target.value)} />
                 </div>
                 {customerError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{customerError}</div>}
+                <div className="flex items-center justify-between text-xs text-gray-500">
+                  <span>Code valid for {otpExpiryText(expiresInSeconds)}.</span>
+                  <button
+                    type="button"
+                    disabled={!canResend(cooldown, customerLoading)}
+                    onClick={() => void requestCustomerOtp()}
+                    className="font-medium text-[var(--theme-accent)] disabled:text-gray-400"
+                  >
+                    {resendLabel(cooldown)}
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <button type="button" onClick={() => { setOtpSent(false); setOtpCode(""); }} className="flex-1 rounded-xl border border-gray-300 px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors">
                     Back
@@ -332,7 +392,7 @@ export default function LoginPage() {
                   </div>
                   <div>
                     <label className={labelCls}>Contact phone</label>
-                    <input className={inputCls} value={vendor.contactPhone} onChange={(e) => setVendor({ ...vendor, contactPhone: e.target.value })} />
+                    <input required inputMode="tel" title="10-digit Indian mobile number" className={inputCls} value={vendor.contactPhone} onChange={(e) => setVendor({ ...vendor, contactPhone: e.target.value })} />
                   </div>
                 </div>
                 <div>

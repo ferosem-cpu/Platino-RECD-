@@ -192,7 +192,7 @@ const searchComplaints: AgentTool = {
       return forbidden("complaints");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = { archivedAt: null }; // archived tickets are out of every working view
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW)) {
       where.assignedToId = auth.userId;
     }

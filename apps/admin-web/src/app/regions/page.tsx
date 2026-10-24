@@ -24,8 +24,13 @@ interface UserOption {
   id: string;
   name: string;
   isActive: boolean;
-  role: { key: string };
+  role: { key: string; name?: string };
 }
+
+interface AuditRow { id: string; at: string; by: string; before: string[]; after: string[] }
+
+const MAPPABLE_ROLES = ["regional_manager", "service_manager"];
+const ROLE_LABEL: Record<string, string> = { regional_manager: "Regional Manager", service_manager: "Service Manager" };
 
 export default function RegionsPage() {
   const { hasPermission } = useAuth();
@@ -40,6 +45,7 @@ export default function RegionsPage() {
   const [managersFor, setManagersFor] = useState<RegionRow | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [audit, setAudit] = useState<AuditRow[] | null>(null);
 
   const load = useCallback(() => {
     api<RegionRow[]>("/regions").then(setRegions).catch((e) => setError(e instanceof Error ? e.message : "Failed to load regions"));
@@ -49,7 +55,7 @@ export default function RegionsPage() {
     load();
     if (canManage && hasPermission("manage_users")) {
       api<UserOption[]>("/users")
-        .then((us) => setManagerCandidates(us.filter((u) => u.isActive && u.role.key === "regional_manager")))
+        .then((us) => setManagerCandidates(us.filter((u) => u.isActive && MAPPABLE_ROLES.includes(u.role.key))))
         .catch(() => {});
     }
   }, [load, canManage, hasPermission]);
@@ -106,6 +112,8 @@ export default function RegionsPage() {
   function openManagers(r: RegionRow) {
     setManagersFor(r);
     setSelected(r.managers.map((m) => m.id));
+    setAudit(null);
+    api<AuditRow[]>(`/regions/${r.id}/audit`).then(setAudit).catch(() => setAudit([]));
   }
 
   async function saveManagers() {
@@ -115,7 +123,7 @@ export default function RegionsPage() {
     try {
       await api(`/regions/${managersFor.id}/managers`, { method: "PUT", body: JSON.stringify({ userIds: selected }) });
       setManagersFor(null);
-      flash("Regional managers saved.");
+      flash("Managers saved.");
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save managers");
@@ -129,7 +137,7 @@ export default function RegionsPage() {
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Regions</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Service regions and the Regional Managers responsible for them. Assign a region to each site from its page; reminders and escalations go to that region&apos;s managers.
+          Service regions and the Service Managers and Regional Managers responsible for them. Assign a region to each site from its page; reminders and escalations go to that region&apos;s managers.
         </p>
       </div>
 
@@ -181,7 +189,7 @@ export default function RegionsPage() {
             </div>
             <p className="text-sm text-gray-600">
               {r.managers.length === 0
-                ? <span className="text-amber-600">No Regional Manager mapped yet</span>
+                ? <span className="text-amber-600">No manager mapped yet - reminders for this region have no recipient</span>
                 : r.managers.map((m) => `${m.name}${m.phone ? ` (${m.phone})` : ""}`).join(", ")}
             </p>
           </section>
@@ -206,12 +214,12 @@ export default function RegionsPage() {
       {managersFor && (
         <div className="modal-backdrop" onClick={() => setManagersFor(null)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-1">Regional Managers - {managersFor.name}</h3>
+            <h3 className="text-lg font-semibold mb-1">Managers - {managersFor.name}</h3>
             <p className="text-xs text-gray-500 mb-3">
-              Only active users with the Regional Manager role can be mapped. Add them on the Users page first.
+              Only active users with the Service Manager or Regional Manager role can be mapped. Reminders go to the region&apos;s Service Managers first (Regional Managers if there are none). Add people on the Users page first.
             </p>
             <div className="max-h-64 overflow-y-auto space-y-1">
-              {managerCandidates.length === 0 && <p className="text-sm text-gray-400">No Regional Manager users yet.</p>}
+              {managerCandidates.length === 0 && <p className="text-sm text-gray-400">No Service Manager or Regional Manager users yet.</p>}
               {managerCandidates.map((u) => (
                 <label key={u.id} className="flex items-center gap-2 text-sm">
                   <input
@@ -219,9 +227,19 @@ export default function RegionsPage() {
                     checked={selected.includes(u.id)}
                     onChange={(e) => setSelected((prev) => (e.target.checked ? [...prev, u.id] : prev.filter((x) => x !== u.id)))}
                   />
-                  {u.name}
+                  {u.name} <span className="text-xs text-gray-400">({ROLE_LABEL[u.role.key] ?? u.role.key})</span>
                 </label>
               ))}
+            </div>
+            <div className="mt-4 border-t border-gray-100 pt-3" data-testid="region-audit">
+              <h4 className="text-xs font-semibold text-gray-600 mb-1">Change history</h4>
+              {audit === null && <p className="text-xs text-gray-400">Loading…</p>}
+              {audit && audit.length === 0 && <p className="text-xs text-gray-400">No changes recorded yet.</p>}
+              <ul className="max-h-32 overflow-y-auto space-y-1 text-xs text-gray-600">
+                {audit?.map((a) => (
+                  <li key={a.id}>{new Date(a.at).toLocaleString()} - {a.by}: {a.before.join(", ") || "nobody"} → {a.after.join(", ") || "nobody"}</li>
+                ))}
+              </ul>
             </div>
             <div className="flex justify-end gap-3 mt-4">
               <button type="button" onClick={() => setManagersFor(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>

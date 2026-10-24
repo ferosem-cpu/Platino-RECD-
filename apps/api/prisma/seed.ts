@@ -1,5 +1,5 @@
+import "dotenv/config";
 import { PrismaClient, SitcPhase } from "@prisma/client";
-import bcrypt from "bcryptjs";
 import {
   ROLE_KEY,
   PERMISSION_KEY,
@@ -9,7 +9,11 @@ import {
   DOCUMENT_REQUIREMENT_TYPE_KEY,
 } from "@recd/shared";
 
+import { SeedRefusedError, ensureSampleUser, planSeed, seedAccounts, type SeedDb, type SeedPlan } from "./seedAccounts";
+
 const prisma = new PrismaClient();
+/** The real client, seen through the small interface the account-seeding rules use (tests use an in-memory fake of the same shape). */
+const seedDb = prisma as unknown as SeedDb;
 
 async function seedPermissions() {
   const permissions = [
@@ -186,42 +190,10 @@ async function seedDocumentRequirementTypes() {
   }
 }
 
-async function seedSampleUsers() {
-  const passwordHash = await bcrypt.hash("changeme123", 10);
+/** Demo customer + its contact (a customer logs in with an OTP, so the contact never gets a password). Local development databases only. */
+async function seedSampleCustomer(plan: SeedPlan) {
   const roleEntries = await prisma.role.findMany();
   const roleIdByKey = new Map(roleEntries.map((r) => [r.key, r.id]));
-
-  const internalUsers = [
-    { name: "Super Admin", email: "superadmin@platino.example", roleKey: ROLE_KEY.SUPER_ADMIN, title: "Super Admin" },
-    { name: "Priya Sharma", email: "owner@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Proprietor" },
-    { name: "Anil Mehta", email: "management@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Operations Head" },
-    { name: "Rahul Verma", email: "sales@platino.example", roleKey: ROLE_KEY.SALES, title: "Sales Engineer" },
-    { name: "Sunil Rao", email: "ops@platino.example", roleKey: ROLE_KEY.OPERATIONS_PM, title: "Project Manager" },
-    { name: "Vikram Singh", email: "erection@platino.example", roleKey: ROLE_KEY.ERECTION_ENGINEER, title: "Erection Engineer" },
-    { name: "Deepak Kumar", email: "commissioning@platino.example", roleKey: ROLE_KEY.COMMISSIONING_ENGINEER, title: "Commissioning Engineer" },
-    { name: "Meena Iyer", email: "service@platino.example", roleKey: ROLE_KEY.SERVICE_TEAM, title: "Service Team" },
-    { name: "Kavita Nair", email: "finance@platino.example", roleKey: ROLE_KEY.FINANCE, title: "Finance" },
-  ];
-
-  for (const u of internalUsers) {
-    await prisma.user.upsert({
-      where: { email: u.email },
-      update: {
-        roleId: roleIdByKey.get(u.roleKey)!,
-        isActive: true,
-        mustChangePassword: false,
-      },
-      create: {
-        name: u.name,
-        email: u.email,
-        passwordHash,
-        title: u.title,
-        roleId: roleIdByKey.get(u.roleKey)!,
-        isActive: true,
-        mustChangePassword: false,
-      },
-    });
-  }
 
   const customer = await prisma.customer.upsert({
     where: { id: "seed-customer-1" },
@@ -233,24 +205,13 @@ async function seedSampleUsers() {
     },
   });
 
-  await prisma.user.upsert({
-    where: { email: "customer@sundaram.example" },
-    update: {
-      roleId: roleIdByKey.get(ROLE_KEY.CUSTOMER)!,
-      isActive: true,
-      mustChangePassword: false,
-    },
-    create: {
-      name: "Suresh Sundaram",
-      email: "customer@sundaram.example",
-      phone: "+919900011122",
-      roleId: roleIdByKey.get(ROLE_KEY.CUSTOMER)!,
-      customerId: customer.id,
-      isActive: true,
-      mustChangePassword: false,
-    },
-  });
-
+  // Existing demo contact is left exactly as it is (no reset of role / active flag / anything else).
+  await ensureSampleUser(
+    seedDb,
+    { name: "Suresh Sundaram", email: "customer@sundaram.example", phone: "+919900011122", roleId: roleIdByKey.get(ROLE_KEY.CUSTOMER)!, customerId: customer.id },
+    null,
+  );
+  void plan;
   return { customer };
 }
 
@@ -353,24 +314,41 @@ async function seedCompanySettings() {
 }
 
 async function main() {
+  // Decide what this run may do (and refuse, before anything is written, when it must not run) - see seedAccounts.ts.
+  const plan = await planSeed(seedDb, process.env);
+
+  // Reference data every environment needs (roles, permissions, stages, lookups): idempotent upserts.
   await seedPermissions();
   await seedRoles();
   await seedStages();
   await seedStatusOptions();
   await seedPhotoCheckpoints();
   await seedDocumentRequirementTypes();
-  const { customer } = await seedSampleUsers();
-  const order = await seedSampleOrder(customer.id);
-  const { approved } = await seedVendors();
-  // Assign the sample site to the approved vendor so its engineer sees it (and other vendors don't).
-  await prisma.site.update({ where: { orderId: order.id }, data: { vendorId: approved.id } });
   await seedCompanySettings();
-  console.log("Seed complete.");
+
+  // Accounts: the secure first Super Admin on a protected database, demo accounts on a local one. Never resets an existing account.
+  const summary = await seedAccounts(seedDb, plan);
+
+  if (plan.sampleData) {
+    const { customer } = await seedSampleCustomer(plan);
+    const order = await seedSampleOrder(customer.id);
+    const { approved } = await seedVendors();
+    // Assign the sample site to the approved vendor so its engineer sees it (and other vendors don't).
+    await prisma.site.update({ where: { orderId: order.id }, data: { vendorId: approved.id } });
+  }
+
+  console.log(
+    `Seed complete (${plan.protectedTarget ? "protected database: reference data only" : "local database: demo data"}).` +
+      ` Bootstrap Super Admin created: ${summary.bootstrapAdminCreated ? "yes" : "no"}.` +
+      (plan.sampleData ? ` Demo accounts created: ${summary.sampleAccountsCreated}.${plan.devPassword ? "" : " No demo password was set (SEED_DEV_PASSWORD is unset): demo accounts cannot sign in with a password."}` : ""),
+  );
 }
 
 main()
   .catch((e) => {
-    console.error(e);
+    // A refusal is an expected, explained stop (exit 1, nothing written); anything else is printed in full.
+    if (e instanceof SeedRefusedError) console.error(e.message);
+    else console.error(e);
     process.exit(1);
   })
   .finally(async () => {

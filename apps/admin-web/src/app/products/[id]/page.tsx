@@ -99,7 +99,7 @@ export default function ProductDetailPage() {
             <span className="value">{product.capacityKva ? `${product.capacityKva} kVA` : "-"}</span>
           </div>
           <div className="data-card-row">
-            <span className="label">Warranty</span>
+            <span className="label">Warranty (default duration)</span>
             <span className="value">{product.warrantyMonths != null ? `${product.warrantyMonths} months` : "-"}</span>
           </div>
         </section>

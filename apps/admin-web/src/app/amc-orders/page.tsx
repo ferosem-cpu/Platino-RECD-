@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
 import { AMC_TYPE_LABELS } from "@recd/shared";
+import { contractStatusLabel, contractStatusPill, daysText, formatDay } from "@/lib/amcUi";
+import { EditDialog, HistoryDialog, RenewDialog, type ContractTarget } from "@/components/AmcContractDialogs";
 
 const AMC_TYPE_OPTIONS = Object.entries(AMC_TYPE_LABELS);
 
@@ -19,21 +24,32 @@ interface AmcOrderRow {
   customer: { id: string; name: string };
   lastExpiryReminderAt: string | null;
   expiryReminderClearedAt: string | null;
+  /** Explicit contract period + status, computed by the API (inclusive calendar days, "YYYY-MM-DD"). */
+  startDate: string;
+  endDate: string;
+  datesSource: "explicit" | "legacy_po_date";
+  contractStatus: "upcoming" | "renewed" | "active" | "expiring_soon" | "expired";
+  daysRemaining: number;
+  renewalCount: number;
+  /** RECD units covered by this contract (GET /amc-orders). */
+  units: { unit: { id: string; serialNo: string | null; status: string; product: { name: string; model: string } } }[];
 }
 
-const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
-
-function amcExpiryDate(poDate: string): Date {
-  const d = new Date(poDate);
-  d.setFullYear(d.getFullYear() + 1);
-  return d;
+/** A selectable unit in the Create AMC form (GET /recd-units?customerId=). */
+interface CustomerUnit {
+  id: string;
+  serialNo: string | null;
+  status: string;
+  product: { name: string; model: string };
+  site: { companyName: string | null; dgModel: string | null; dgCapacityKva: string | number | null } | null;
 }
 
-/** Mirrors the server's reminder window (see apps/api/src/routes/amcOrders.ts) - reminders start 1 month before expiry. */
-function isInReminderWindow(order: AmcOrderRow): boolean {
-  if (order.expiryReminderClearedAt) return false;
-  const expiry = amcExpiryDate(order.poDate);
-  return Date.now() >= expiry.getTime() - ONE_MONTH_MS;
+interface ContractCounts {
+  upcoming: number;
+  renewed: number;
+  active: number;
+  expiringSoon: number;
+  expired: number;
 }
 
 interface Counts {
@@ -64,7 +80,12 @@ export default function AmcOrdersPage() {
   const [orders, setOrders] = useState<AmcOrderRow[]>([]);
   const [counts, setCounts] = useState<Counts | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [contractCounts, setContractCounts] = useState<ContractCounts | null>(null);
+  const [defaultMonths, setDefaultMonths] = useState(12);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<{ kind: "renew" | "edit" | "history"; order: AmcOrderRow } | null>(null);
 
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
@@ -73,6 +94,9 @@ export default function AmcOrdersPage() {
   const [orderFormError, setOrderFormError] = useState<string | null>(null);
   const [customerFormError, setCustomerFormError] = useState<string | null>(null);
   const [clearingId, setClearingId] = useState<string | null>(null);
+  const [customerUnits, setCustomerUnits] = useState<CustomerUnit[]>([]);
+  const [unitsLoading, setUnitsLoading] = useState(false);
+  const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
 
   const [orderForm, setOrderForm] = useState({
     poNo: "",
@@ -83,6 +107,9 @@ export default function AmcOrdersPage() {
     qty: "1",
     amcFrequencyPerYear: "1",
     amcType: AMC_TYPE_OPTIONS[0][0],
+    startDate: "",
+    endDate: "",
+    durationMonths: "",
   });
 
   const [customerForm, setCustomerForm] = useState({
@@ -94,16 +121,41 @@ export default function AmcOrdersPage() {
   });
 
   function load() {
-    api<{ orders: AmcOrderRow[]; counts: Counts }>("/amc-orders")
+    api<{ orders: AmcOrderRow[]; counts: Counts; contractCounts: ContractCounts; policy: { durationMonths: number } }>("/amc-orders")
       .then((data) => {
         setOrders(data.orders);
         setCounts(data.counts);
+        setContractCounts(data.contractCounts);
+        setDefaultMonths(data.policy.durationMonths);
+        setError(null);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load AMC orders"));
+      .catch((err) => setError(apiErrorMessage(err, "Failed to load AMC orders")))
+      .finally(() => setLoading(false));
     api<Customer[]>("/customers").then(setCustomers).catch(() => {});
   }
 
   useEffect(load, []);
+
+  // The units an AMC can cover are the chosen customer's RECDs that have a serial and are in service.
+  useEffect(() => {
+    setSelectedUnitIds([]);
+    setCustomerUnits([]);
+    if (!orderForm.customerId) return;
+    setUnitsLoading(true);
+    api<CustomerUnit[]>(`/recd-units?customerId=${encodeURIComponent(orderForm.customerId)}`)
+      .then((rows) => setCustomerUnits(rows.filter((u) => u.serialNo && u.status === "active")))
+      .catch((err) => setOrderFormError(apiErrorMessage(err, "Failed to load this customer's RECD units")))
+      .finally(() => setUnitsLoading(false));
+  }, [orderForm.customerId]);
+
+  function toggleUnit(id: string) {
+    setSelectedUnitIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      // Qty follows the number of units picked (still editable afterwards).
+      if (next.length) setOrderForm((f) => ({ ...f, qty: String(next.length) }));
+      return next;
+    });
+  }
 
   async function submitOrder(e: React.FormEvent) {
     e.preventDefault();
@@ -122,13 +174,18 @@ export default function AmcOrdersPage() {
           qty: parseInt(orderForm.qty, 10) || 1,
           amcFrequencyPerYear: parseInt(orderForm.amcFrequencyPerYear, 10) || 1,
           amcType: orderForm.amcType,
+          unitIds: selectedUnitIds,
+          ...(orderForm.startDate ? { startDate: orderForm.startDate } : {}),
+          ...(orderForm.endDate ? { endDate: orderForm.endDate } : orderForm.durationMonths ? { durationMonths: Number(orderForm.durationMonths) } : {}),
         }),
       });
       setOrderModalOpen(false);
-      setOrderForm({ poNo: "", poDate: today(), customerId: "", location: "", item: "", qty: "1", amcFrequencyPerYear: "1", amcType: AMC_TYPE_OPTIONS[0][0] });
+      setSelectedUnitIds([]);
+      setOrderForm({ poNo: "", poDate: today(), customerId: "", location: "", item: "", qty: "1", amcFrequencyPerYear: "1", amcType: AMC_TYPE_OPTIONS[0][0], startDate: "", endDate: "", durationMonths: "" });
+      setNotice("AMC order created.");
       load();
     } catch (err) {
-      setOrderFormError(err instanceof Error ? err.message : "Failed to create AMC order");
+      setOrderFormError(apiErrorMessage(err, "Failed to create AMC order"));
     } finally {
       setSavingOrder(false);
     }
@@ -136,8 +193,13 @@ export default function AmcOrdersPage() {
 
   async function submitCustomer(e: React.FormEvent) {
     e.preventDefault();
-    setSavingCustomer(true);
     setCustomerFormError(null);
+    const phoneError = mobileFieldError(customerForm.contactPhone);
+    if (phoneError) {
+      setCustomerFormError(phoneError);
+      return;
+    }
+    setSavingCustomer(true);
     try {
       const created = await api<{ id: string }>("/customers", {
         method: "POST",
@@ -145,7 +207,7 @@ export default function AmcOrdersPage() {
           name: customerForm.name,
           address: customerForm.address || undefined,
           contactName: customerForm.contactName,
-          contactPhone: customerForm.contactPhone,
+          contactPhone: cleanMobile(customerForm.contactPhone),
           contactEmail: customerForm.contactEmail || undefined,
         }),
       });
@@ -154,7 +216,7 @@ export default function AmcOrdersPage() {
       setOrderForm((f) => ({ ...f, customerId: created.id }));
       load();
     } catch (err) {
-      setCustomerFormError(err instanceof Error ? err.message : "Failed to create customer");
+      setCustomerFormError(apiErrorMessage(err, "Failed to create customer"));
     } finally {
       setSavingCustomer(false);
     }
@@ -171,6 +233,13 @@ export default function AmcOrdersPage() {
     } finally {
       setClearingId(null);
     }
+  }
+
+  const target = (o: AmcOrderRow): ContractTarget => ({ id: o.id, label: `PO ${o.poNo}`, startDate: o.startDate, endDate: o.endDate });
+  function dialogDone(msg: string) {
+    setDialog(null);
+    setNotice(msg);
+    load();
   }
 
   const statTiles = [
@@ -225,7 +294,8 @@ export default function AmcOrdersPage() {
         </div>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p role="alert" className="text-sm text-red-600" data-testid="amc-error">{error}</p>}
+      {notice && <p role="status" className="text-sm text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2" data-testid="amc-notice">{notice}</p>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {statTiles.map((t) => (
@@ -241,6 +311,16 @@ export default function AmcOrdersPage() {
         ))}
       </div>
 
+      {contractCounts && (
+        <div className="flex flex-wrap gap-2 text-xs" data-testid="amc-contract-counts">
+          <span className="status-pill">Upcoming {contractCounts.upcoming}</span>
+          <span className="status-pill status-pill-success">Renewed {contractCounts.renewed}</span>
+          <span className="status-pill status-pill-success">Active {contractCounts.active}</span>
+          <span className="status-pill status-pill-warning">Expiring soon {contractCounts.expiringSoon}</span>
+          <span className="status-pill status-pill-error">Expired {contractCounts.expired}</span>
+        </div>
+      )}
+
       <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100">
           <h2 className="text-sm font-semibold">AMC Order List</h2>
@@ -255,42 +335,68 @@ export default function AmcOrdersPage() {
                 <th className="px-4 py-3">Customer Name</th>
                 <th className="px-4 py-3">Location</th>
                 <th className="px-4 py-3">Item</th>
+                <th className="px-4 py-3">RECD Serial No.</th>
                 <th className="px-4 py-3">Qty</th>
                 <th className="px-4 py-3">AMC Frequency per Year</th>
                 <th className="px-4 py-3">AMC Type</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Expiry</th>
+                <th className="px-4 py-3">AMC Period</th>
+                <th className="px-4 py-3">Contract</th>
                 <th className="px-4 py-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {orders.map((o, idx) => {
-                const expiry = amcExpiryDate(o.poDate);
                 const cleared = !!o.expiryReminderClearedAt;
-                const dueForReminder = isInReminderWindow(o);
                 return (
                   <tr key={o.id} className="hover:bg-gray-50/60">
                     <td className="px-4 py-3">{idx + 1}</td>
                     <td className="px-4 py-3 font-mono text-xs font-semibold">{o.poNo}</td>
-                    <td className="px-4 py-3">{new Date(o.poDate).toLocaleDateString()}</td>
+                    <td className="px-4 py-3">{formatDay(o.poDate)}</td>
                     <td className="px-4 py-3">{o.customer.name}</td>
                     <td className="px-4 py-3">{o.location}</td>
                     <td className="px-4 py-3">{o.item}</td>
+                    <td className="px-4 py-3" data-testid="amc-serials">
+                      {o.units.length === 0 ? (
+                        <span className="text-xs text-gray-400">No units linked</span>
+                      ) : (
+                        <div className="flex flex-col gap-0.5">
+                          {o.units.map(({ unit }) => (
+                            <Link key={unit.id} href={`/recd-units/${unit.id}`} className="font-mono text-xs hover:underline">
+                              {unit.serialNo ?? "Serial not entered"}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3">{o.qty}</td>
                     <td className="px-4 py-3">{o.amcFrequencyPerYear}</td>
                     <td className="px-4 py-3">{AMC_TYPE_LABELS[o.amcType] ?? o.amcType}</td>
                     <td className="px-4 py-3">
                       <span className={statusPill(o.status)}>{pretty(o.status)}</span>
                     </td>
-                    <td className="px-4 py-3">
-                      <div>{expiry.toLocaleDateString()}</div>
-                      {cleared ? (
-                        <span className="text-[10px] font-semibold text-emerald-600">AMC Acquired</span>
-                      ) : dueForReminder ? (
-                        <span className="text-[10px] font-semibold text-red-600">Renewal due</span>
-                      ) : null}
+                    <td className="px-4 py-3 whitespace-nowrap" data-testid={`amc-period-${o.poNo}`}>
+                      <div>{formatDay(o.startDate)} to {formatDay(o.endDate)}</div>
+                      {o.datesSource === "legacy_po_date" && <span className="text-[10px] text-gray-400" title="Derived from the PO date (one year); edit the dates to make them explicit">derived from PO date</span>}
+                    </td>
+                    <td className="px-4 py-3" data-testid={`amc-contract-${o.poNo}`}>
+                      <span className={contractStatusPill(o.contractStatus)}>{contractStatusLabel(o.contractStatus)}</span>
+                      <div className="text-[10px] text-gray-500 mt-0.5">{daysText(o.contractStatus, o.daysRemaining)}</div>
+                      {cleared && <span className="text-[10px] font-semibold text-emerald-600">AMC Acquired</span>}
+                      {o.renewalCount > 0 && <div className="text-[10px] text-gray-500">{o.renewalCount} renewal/change{o.renewalCount === 1 ? "" : "s"}</div>}
                     </td>
                     <td className="px-4 py-3 text-right">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                      <Link
+                        href={`/service-reports?amcOrderId=${o.id}`}
+                        data-testid={`amc-reports-link-${o.poNo}`}
+                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Service reports
+                      </Link>
+                      <button onClick={() => setDialog({ kind: "renew", order: o })} className="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50" data-testid={`amc-renew-${o.poNo}`}>Renew</button>
+                      <button onClick={() => setDialog({ kind: "edit", order: o })} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50" data-testid={`amc-edit-${o.poNo}`}>Edit</button>
+                      <button onClick={() => setDialog({ kind: "history", order: o })} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50" data-testid={`amc-history-${o.poNo}`}>History</button>
                       {!cleared && (
                         <button
                           onClick={() => clearReminder(o.id)}
@@ -300,13 +406,19 @@ export default function AmcOrdersPage() {
                           {clearingId === o.id ? "Saving…" : "AMC Acquired"}
                         </button>
                       )}
+                      </div>
                     </td>
                   </tr>
                 );
               })}
-              {orders.length === 0 && (
+              {loading && (
                 <tr>
-                  <td colSpan={12} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={14} className="px-4 py-12 text-center text-gray-400" data-testid="amc-loading">Loading AMC orders…</td>
+                </tr>
+              )}
+              {!loading && orders.length === 0 && (
+                <tr>
+                  <td colSpan={14} className="px-4 py-12 text-center text-gray-400">
                     No AMC orders found.
                     <br />
                     <span className="text-xs">Create a new AMC order to get started.</span>
@@ -340,6 +452,31 @@ export default function AmcOrdersPage() {
                   ))}
                 </select>
               </div>
+              {orderForm.customerId && (
+                <div data-testid="amc-unit-picker">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    RECD units covered{selectedUnitIds.length ? ` (${selectedUnitIds.length} selected)` : ""}
+                  </label>
+                  <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+                    {unitsLoading && <p className="px-3 py-3 text-xs text-gray-400">Loading units…</p>}
+                    {!unitsLoading && customerUnits.length === 0 && (
+                      <p className="px-3 py-3 text-xs text-gray-400">This customer has no active RECD units with a serial number.</p>
+                    )}
+                    {customerUnits.map((u) => (
+                      <label key={u.id} className="flex items-start gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+                        <input type="checkbox" className="mt-1" checked={selectedUnitIds.includes(u.id)} onChange={() => toggleUnit(u.id)} />
+                        <span>
+                          <span className="font-mono text-xs font-semibold">{u.serialNo}</span>
+                          <span className="block text-xs text-gray-500">
+                            {u.product.name} ({u.product.model}){u.site?.companyName ? ` · ${u.site.companyName}` : ""}
+                            {u.site?.dgModel ? ` · DG ${u.site.dgModel}` : ""}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">PO No</label>
@@ -349,6 +486,21 @@ export default function AmcOrdersPage() {
                   <label className="block text-xs font-medium text-gray-500 mb-1">PO Date</label>
                   <input required type="date" className="field w-full" value={orderForm.poDate} onChange={(e) => setOrderForm({ ...orderForm, poDate: e.target.value })} />
                 </div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 space-y-2" data-testid="amc-period-fields">
+                <p className="text-xs font-semibold text-gray-600">AMC period (optional)</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="block text-xs font-medium text-gray-500">Start date
+                    <input type="date" className="field w-full mt-1" value={orderForm.startDate} onChange={(e) => setOrderForm({ ...orderForm, startDate: e.target.value })} data-testid="amc-start-date" />
+                  </label>
+                  <label className="block text-xs font-medium text-gray-500">End date
+                    <input type="date" className="field w-full mt-1" value={orderForm.endDate} onChange={(e) => setOrderForm({ ...orderForm, endDate: e.target.value })} data-testid="amc-end-date" />
+                  </label>
+                  <label className="block text-xs font-medium text-gray-500">or Duration (months)
+                    <input type="number" min={1} max={120} className="field w-full mt-1" placeholder={String(defaultMonths)} value={orderForm.durationMonths} onChange={(e) => setOrderForm({ ...orderForm, durationMonths: e.target.value })} disabled={!!orderForm.endDate} data-testid="amc-duration" />
+                  </label>
+                </div>
+                <p className="text-[11px] text-gray-400">Blank start = the PO date. Blank end = start + {orderForm.durationMonths || defaultMonths} months (the day before the anniversary). Dates are inclusive.</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Location</label>
@@ -393,6 +545,23 @@ export default function AmcOrdersPage() {
         </div>
       )}
 
+      {dialog?.kind === "renew" && <RenewDialog target={target(dialog.order)} basePath="/amc-orders" defaultMonths={defaultMonths} onClose={() => setDialog(null)} onDone={dialogDone} />}
+      {dialog?.kind === "history" && <HistoryDialog target={target(dialog.order)} basePath="/amc-orders" onClose={() => setDialog(null)} />}
+      {dialog?.kind === "edit" && (
+        <EditDialog
+          target={target(dialog.order)}
+          basePath="/amc-orders"
+          fields={[
+            { key: "location", label: "Location", value: dialog.order.location, required: true },
+            { key: "item", label: "Item", value: dialog.order.item, required: true },
+            { key: "qty", label: "Qty", value: String(dialog.order.qty), type: "number", required: true },
+            { key: "amcFrequencyPerYear", label: "AMC frequency per year", value: String(dialog.order.amcFrequencyPerYear), type: "number", required: true },
+          ]}
+          onClose={() => setDialog(null)}
+          onDone={dialogDone}
+        />
+      )}
+
       {customerModalOpen && (
         <div className="modal-backdrop" onClick={() => setCustomerModalOpen(false)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
@@ -405,7 +574,7 @@ export default function AmcOrdersPage() {
               <input placeholder="Address" className="field w-full" value={customerForm.address} onChange={(e) => setCustomerForm({ ...customerForm, address: e.target.value })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <input required placeholder="Contact name" className="field" value={customerForm.contactName} onChange={(e) => setCustomerForm({ ...customerForm, contactName: e.target.value })} />
-                <input required placeholder="Contact phone" className="field" value={customerForm.contactPhone} onChange={(e) => setCustomerForm({ ...customerForm, contactPhone: e.target.value })} />
+                <input required inputMode="tel" title="10-digit Indian mobile number" placeholder="Contact mobile" className="field" value={customerForm.contactPhone} onChange={(e) => setCustomerForm({ ...customerForm, contactPhone: e.target.value })} />
               </div>
               <input type="email" placeholder="Contact email (optional)" className="field w-full" value={customerForm.contactEmail} onChange={(e) => setCustomerForm({ ...customerForm, contactEmail: e.target.value })} />
 

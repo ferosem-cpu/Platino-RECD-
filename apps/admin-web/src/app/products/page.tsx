@@ -309,7 +309,7 @@ function ProductsPageInner() {
               <input placeholder="Rating spec (optional)" className="field w-full" value={form.ratingSpec} onChange={(e) => setForm({ ...form, ratingSpec: e.target.value })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <input type="number" min={0} step="0.01" placeholder="Capacity (kVA)" className="field" value={form.capacityKva} onChange={(e) => setForm({ ...form, capacityKva: e.target.value })} />
-                <input type="number" min={0} placeholder="Warranty (months)" className="field" value={form.warrantyMonths} onChange={(e) => setForm({ ...form, warrantyMonths: e.target.value })} />
+                <input type="number" min={0} placeholder="Warranty (months)" title="Default duration for new unit warranties. A unit keeps the duration it was recorded with." className="field" value={form.warrantyMonths} onChange={(e) => setForm({ ...form, warrantyMonths: e.target.value })} />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

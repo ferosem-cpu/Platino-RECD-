@@ -9,6 +9,7 @@ import SiteDetailScreen from "@/screens/SiteDetailScreen";
 import MyOrdersScreen from "@/screens/MyOrdersScreen";
 import OrderDetailScreen from "@/screens/OrderDetailScreen";
 import RaiseComplaintScreen from "@/screens/RaiseComplaintScreen";
+import ChangePasswordScreen from "@/screens/ChangePasswordScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -21,7 +22,7 @@ function isFieldRole(role: string) {
 }
 
 export default function RootNavigator() {
-  const { user, loading } = useAuth();
+  const { user, loading, passwordChangeRequired } = useAuth();
   if (loading) return null;
 
   return (
@@ -33,6 +34,9 @@ export default function RootNavigator() {
             <Stack.Screen name="OtpRequest" component={OtpRequestScreen} options={{ title: "Customer sign in" }} />
             <Stack.Screen name="OtpVerify" component={OtpVerifyScreen} options={{ title: "Verify code" }} />
           </>
+        ) : passwordChangeRequired ? (
+          // The server refuses everything else for this account until the password is changed.
+          <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ title: "Change password", headerBackVisible: false }} />
         ) : isFieldRole(user.role) ? (
           <>
             <Stack.Screen name="MySites" component={MySitesScreen} options={{ title: "My sites" }} />

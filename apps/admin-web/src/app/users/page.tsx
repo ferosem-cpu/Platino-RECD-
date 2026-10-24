@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
 import { DataTable } from "@/components/DataTable";
+import { useAuth } from "@/components/AuthContext";
+import { checkEmailInput, roleNeedsVendor, roleOptionsFor, rowActionsFor, userAdminErrorMessage, vendorRequiredOnEdit } from "@/lib/userAdminUi";
 
 interface UserRow {
   id: string;
@@ -12,6 +16,8 @@ interface UserRow {
   title: string | null;
   role: { key: string; name: string };
   isActive: boolean;
+  vendorId?: string | null;
+  customerId?: string | null;
 }
 
 interface AuditRow {
@@ -30,6 +36,9 @@ const AUDIT_LABELS: Record<string, string> = {
   deactivated: "Deactivated",
   activated: "Reactivated",
   password_reset: "Password reset",
+  association_changed: "Customer / vendor link changed",
+  action_denied: "Refused (not allowed)",
+  deleted: "Account deleted",
 };
 
 interface RoleOption {
@@ -79,6 +88,9 @@ function KeyIcon() {
 }
 
 export default function UsersPage() {
+  const { user: me } = useAuth();
+  const actor = me ? { id: me.id, roleKey: me.role.key } : null;
+  const actionsFor = (u: UserRow) => rowActionsFor(actor, u);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [vendors, setVendors] = useState<VendorOption[]>([]);
@@ -89,7 +101,7 @@ export default function UsersPage() {
 
   // Edit modal state
   const [editUser, setEditUser] = useState<UserRow | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", email: "", roleKey: "", phone: "", title: "" });
+  const [editForm, setEditForm] = useState({ name: "", email: "", roleKey: "", phone: "", title: "", vendorId: "" });
   const [editError, setEditError] = useState<string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
 
@@ -128,16 +140,21 @@ export default function UsersPage() {
     setError(null);
     setTempPassword(null);
     setSuccess(null);
+    // Same shared rule the server applies (spaces, hyphens, +91 / 0 prefixes are fine); the API still validates on its own.
+    const phoneError = mobileFieldError(form.phone);
+    if (phoneError) return setError(phoneError);
+    const emailCheck = checkEmailInput(form.email);
+    if (!emailCheck.ok) return setError(emailCheck.error);
     try {
       const result = await api<{ tempPassword: string }>("/users", {
         method: "POST",
-        body: JSON.stringify({ ...form, vendorId: form.vendorId || undefined }),
+        body: JSON.stringify({ ...form, email: emailCheck.email, phone: cleanMobile(form.phone), vendorId: roleNeedsVendor(form.roleKey) ? form.vendorId || undefined : undefined }),
       });
       setTempPassword(result.tempPassword);
       setForm({ name: "", email: "", roleKey: "", phone: "", title: "", vendorId: "" });
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add user");
+      setError(userAdminErrorMessage(err, "Failed to add user"));
     }
   }
 
@@ -151,6 +168,7 @@ export default function UsersPage() {
       roleKey: user.role.key,
       phone: user.phone ?? "",
       title: user.title ?? "",
+      vendorId: user.vendorId ?? "",
     });
     setEditError(null);
   }
@@ -160,16 +178,27 @@ export default function UsersPage() {
     if (!editUser) return;
     setEditLoading(true);
     setEditError(null);
+    const phoneError = mobileFieldError(editForm.phone);
+    if (phoneError) {
+      setEditLoading(false);
+      return setEditError(phoneError);
+    }
+    const emailCheck = checkEmailInput(editForm.email);
+    if (!emailCheck.ok) {
+      setEditLoading(false);
+      return setEditError(emailCheck.error);
+    }
     try {
-      await api(`/users/${editUser.id}`, {
-        method: "PUT",
-        body: JSON.stringify(editForm),
-      });
+      // Only what the person can legitimately change is sent: the vendor only for a vendor-scoped role, and only when it changed.
+      const body: Record<string, unknown> = { name: editForm.name, email: emailCheck.email, phone: cleanMobile(editForm.phone), title: editForm.title };
+      if (editForm.roleKey !== editUser.role.key) body.roleKey = editForm.roleKey;
+      if (roleNeedsVendor(editForm.roleKey) && editForm.vendorId !== (editUser.vendorId ?? "")) body.vendorId = editForm.vendorId || null; // an unchanged vendor (including none) is never sent
+      await api(`/users/${editUser.id}`, { method: "PUT", body: JSON.stringify(body) });
       setEditUser(null);
       setSuccess("User updated successfully");
       load();
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Failed to update user");
+      setEditError(userAdminErrorMessage(err, "Failed to update user"));
     } finally {
       setEditLoading(false);
     }
@@ -186,7 +215,7 @@ export default function UsersPage() {
       setSuccess("User deactivated");
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to deactivate user");
+      setError(userAdminErrorMessage(err, "Failed to deactivate user"));
       setDeactivateUser(null);
     } finally {
       setDeactivateLoading(false);
@@ -202,7 +231,7 @@ export default function UsersPage() {
       setSuccess("User activated");
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to activate user");
+      setError(userAdminErrorMessage(err, "Failed to activate user"));
     }
   }
 
@@ -218,7 +247,7 @@ export default function UsersPage() {
       setResetResult(result.tempPassword);
       loadAudit();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to reset password");
+      setError(userAdminErrorMessage(err, "Failed to reset password"));
       setResetUser(null);
     } finally {
       setResetLoading(false);
@@ -278,8 +307,6 @@ export default function UsersPage() {
               required
               type="tel"
               inputMode="numeric"
-              pattern="(\+?91|0)?[6-9][0-9]{9}"
-              title="10-digit Indian mobile number"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
               value={form.phone}
               placeholder="10-digit mobile"
@@ -304,12 +331,12 @@ export default function UsersPage() {
               onChange={(e) => setForm({ ...form, roleKey: e.target.value })}
             >
               <option value="" disabled>Select a role</option>
-              {roles.map((r) => (
+              {roleOptionsFor(actor?.roleKey ?? "", roles).map((r) => (
                 <option key={r.key} value={r.key}>{r.name}</option>
               ))}
             </select>
           </div>
-          {form.roleKey === "erection_engineer" && (
+          {roleNeedsVendor(form.roleKey) && (
             <div>
               <label className="block text-xs text-gray-500 mb-1">Vendor</label>
               <select
@@ -401,31 +428,35 @@ export default function UsersPage() {
               <div className="flex items-center justify-end gap-1">
                 <button
                   onClick={() => openEdit(u)}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                  title="Edit user"
+                  disabled={!actionsFor(u).edit}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={actionsFor(u).edit ? "Edit user" : actionsFor(u).reason ?? "Not available"}
                 >
                   <PencilIcon />
                 </button>
                 <button
                   onClick={() => { setResetUser(u); setResetResult(null); }}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                  title="Reset password"
+                  disabled={!actionsFor(u).reset}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={actionsFor(u).reset ? "Reset password" : actionsFor(u).reason ?? "Not available"}
                 >
                   <KeyIcon />
                 </button>
                 {u.isActive ? (
                   <button
                     onClick={() => setDeactivateUser(u)}
-                    className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                    title="Deactivate user"
+                    disabled={!actionsFor(u).toggleActive}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    title={actionsFor(u).toggleActive ? "Deactivate user" : actionsFor(u).reason ?? "Not available"}
                   >
                     <BlockIcon />
                   </button>
                 ) : (
                   <button
                     onClick={() => handleActivate(u)}
-                    className="p-1.5 rounded-lg text-gray-400 hover:text-green-600 hover:bg-green-50 transition-colors"
-                    title="Activate user"
+                    disabled={!actionsFor(u).toggleActive}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-green-600 hover:bg-green-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    title={actionsFor(u).toggleActive ? "Activate user" : actionsFor(u).reason ?? "Not available"}
                   >
                     <CheckIcon />
                   </button>
@@ -472,27 +503,35 @@ export default function UsersPage() {
               <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
                 <button
                   onClick={() => openEdit(u)}
-                  className="flex-1 min-w-[40%] rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-1.5"
+                  disabled={!actionsFor(u).edit}
+                  title={actionsFor(u).edit ? undefined : actionsFor(u).reason ?? undefined}
+                  className="flex-1 min-w-[40%] rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <PencilIcon /> Edit
                 </button>
                 <button
                   onClick={() => { setResetUser(u); setResetResult(null); }}
-                  className="flex-1 min-w-[40%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 flex items-center justify-center gap-1.5"
+                  disabled={!actionsFor(u).reset}
+                  title={actionsFor(u).reset ? undefined : actionsFor(u).reason ?? undefined}
+                  className="flex-1 min-w-[40%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <KeyIcon /> Reset
                 </button>
                 {u.isActive ? (
                   <button
                     onClick={() => setDeactivateUser(u)}
-                    className="flex-1 min-w-[40%] rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 flex items-center justify-center gap-1.5"
+                    disabled={!actionsFor(u).toggleActive}
+                    title={actionsFor(u).toggleActive ? undefined : actionsFor(u).reason ?? undefined}
+                    className="flex-1 min-w-[40%] rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <BlockIcon /> Deactivate
                   </button>
                 ) : (
                   <button
                     onClick={() => handleActivate(u)}
-                    className="flex-1 min-w-[40%] rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-700 hover:bg-green-100 flex items-center justify-center gap-1.5"
+                    disabled={!actionsFor(u).toggleActive}
+                    title={actionsFor(u).toggleActive ? undefined : actionsFor(u).reason ?? undefined}
+                    className="flex-1 min-w-[40%] rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-700 hover:bg-green-100 flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <CheckIcon /> Activate
                   </button>
@@ -543,8 +582,6 @@ export default function UsersPage() {
                     required
                     type="tel"
                     inputMode="numeric"
-                    pattern="(\+?91|0)?[6-9][0-9]{9}"
-                    title="10-digit Indian mobile number"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
                     value={editForm.phone}
                     onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
@@ -566,17 +603,43 @@ export default function UsersPage() {
                   <select
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
                     value={editForm.roleKey}
+                    disabled={editUser.id === actor?.id}
+                    title={editUser.id === actor?.id ? "You cannot change your own role" : undefined}
+                    data-testid="edit-role"
                     onChange={(e) => setEditForm({ ...editForm, roleKey: e.target.value })}
                   >
-                    {roles.map((r) => (
+                    {roleOptionsFor(actor?.roleKey ?? "", roles, editUser.role.key).map((r) => (
                       <option key={r.key} value={r.key}>{r.name}</option>
                     ))}
                   </select>
                 </div>
               </div>
+              {roleNeedsVendor(editForm.roleKey) && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Vendor</label>
+                  <select
+                    required={vendorRequiredOnEdit({ roleKey: editUser.role.key, vendorId: editUser.vendorId }, editForm.roleKey)}
+                    disabled={editUser.id === actor?.id}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+                    value={editForm.vendorId}
+                    data-testid="edit-vendor"
+                    onChange={(e) => setEditForm({ ...editForm, vendorId: e.target.value })}
+                  >
+                    <option value="">{vendorRequiredOnEdit({ roleKey: editUser.role.key, vendorId: editUser.vendorId }, editForm.roleKey) ? "Select a vendor" : "No vendor (internal engineer)"}</option>
+                    {vendors.filter((v) => v.status === "approved" || v.id === editUser.vendorId).map((v) => (
+                      <option key={v.id} value={v.id}>{v.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {editUser.role.key === "erection_engineer" && !roleNeedsVendor(editForm.roleKey) && (
+                <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2" data-testid="edit-vendor-cleared-note">
+                  Moving this person out of the erection-engineer role removes their vendor link, so they are no longer limited to one vendor&apos;s sites. Their current sessions will be signed out.
+                </p>
+              )}
 
               {editError && (
-                <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{editError}</p>
+                <p role="alert" data-testid="edit-error" className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{editError}</p>
               )}
 
               <div className="flex justify-end gap-3 pt-2">

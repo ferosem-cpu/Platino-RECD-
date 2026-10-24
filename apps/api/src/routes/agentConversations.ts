@@ -10,8 +10,29 @@
  * pattern (see executeConfirmedAction and the /actions/:actionId/confirm|reject routes below).
  */
 import { Router } from "express";
-import { STAGE_KEY } from "@recd/shared";
+import { canOverrideDuplicatePo, STAGE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
+import { findTakenSerials, parseSerialList, takenSerialsMessage } from "../lib/serials";
+import { isSerialConflict, SERIAL_RACE_MESSAGE } from "../lib/uniqueViolations";
+import { agentDuplicatePoMessage, createNewOrder, OrderCreationError } from "../lib/orderCreation";
+
+/**
+ * The confirmed action cannot be carried out because of the input itself (400) or because it
+ * conflicts with existing data (409). The pending action is left untouched so the user can
+ * reject it or have the assistant prepare it again. Any other error is a real failure (500).
+ */
+/** Shown to the user when confirming/rejecting fails for an internal reason (details go to the server log only). */
+export const SAFE_ACTION_FAILED_MESSAGE =
+  "Something went wrong on our side, so this action could not be completed and nothing was created. The card is still waiting - you can try again or reject it.";
+export const SAFE_ACTION_DONE_BUT_NOT_SAVED_MESSAGE =
+  "The action was carried out, but the chat could not be updated afterwards. Please refresh the page to see the result, and do not confirm it again.";
+
+export class AgentActionError extends Error {
+  constructor(public readonly status: 400 | 409, message: string) {
+    super(message);
+    this.name = "AgentActionError";
+  }
+}
 import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
 import { buildAgentSystemPrompt } from "../agent/systemPrompt";
@@ -100,41 +121,60 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, async
  * routes/products.ts) rather than reinventing it, so a confirmed agent action and a normal
  * UI-created record behave identically. Returns the created record's id.
  */
-async function executeConfirmedAction(
+export async function executeConfirmedAction(
   toolName: string,
   input: Record<string, unknown>,
   userId: string,
+  /** Role of the confirming user - only used to word a duplicate-PO refusal; it never grants an override. */
+  roleKey?: string | null,
 ): Promise<string> {
   switch (toolName) {
     case "create_order": {
-      const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
-      const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-      const order = await prisma.order.create({
-        data: {
-          orderNumber,
+      // Serials are mandatory (same rule as POST /orders). An action proposed before this rule
+      // existed has none stored - refuse it rather than create "serial pending" units.
+      const serialCheck = parseSerialList(input.recdSerials, Number(input.quantity));
+      if ("error" in serialCheck) {
+        throw new AgentActionError(400, `${serialCheck.error} Reject this card and ask the assistant to prepare the order again with the serial numbers.`);
+      }
+      // A PO number is mandatory (same rule as POST /orders). An action proposed before this rule existed has none
+      // stored - refuse it rather than create an order without a PO.
+      const poNumber = typeof input.poNumber === "string" ? input.poNumber.trim() : "";
+      if (!poNumber || poNumber.length > 60) {
+        throw new AgentActionError(400, "This order has no valid customer PO number (1-60 characters). Reject this card and ask the assistant to prepare the order again with the PO number.");
+      }
+      const taken = await findTakenSerials(serialCheck.serials);
+      if (taken.length) throw new AgentActionError(409, takenSerialsMessage(taken));
+
+      // Same creation path as POST /orders: unknown customer/product -> 400, same-customer duplicate PO -> 409, order
+      // number retried, order + site + units in one transaction. The assistant cannot override a duplicate PO: an
+      // approved duplicate has to be entered by an administrator on the Orders page (allowDuplicatePo).
+      try {
+        const order = await createNewOrder({
           customerId: String(input.customerId),
           productId: String(input.productId),
           quantity: Number(input.quantity),
           value: input.value !== undefined && input.value !== null ? Number(input.value) : undefined,
-          orderDate: input.orderDate ? new Date(String(input.orderDate)) : undefined,
-          promisedDeliveryDate: input.promisedDeliveryDate ? new Date(String(input.promisedDeliveryDate)) : undefined,
+          orderDate: input.orderDate ? new Date(String(input.orderDate)).toISOString() : undefined,
+          promisedDeliveryDate: input.promisedDeliveryDate ? new Date(String(input.promisedDeliveryDate)).toISOString() : undefined,
           plannedExhaustHookupType: (input.plannedExhaustHookupType as string | null) ?? undefined,
+          poNumber,
+          poDate: input.poDate ? new Date(String(input.poDate)).toISOString() : undefined,
+          serials: serialCheck.serials,
           salesEngineerId: userId,
-          // The agent has no way to know physical serials: units are created "serial pending"
-          // (serialNo null) and show up under /recd-units?pending=1 until staff enter them.
-          site: { create: { currentStageId: firstStage.id } },
-          poNumber: (input.poNumber as string | null) ?? undefined,
-        },
-        include: { site: true },
-      });
-      await prisma.recdUnit.createMany({
-        data: Array.from({ length: Math.max(1, Number(input.quantity)) }, () => ({
-          orderId: order.id,
-          siteId: order.site?.id,
-          productId: String(input.productId),
-        })),
-      });
-      return order.id;
+          allowDuplicatePo: false,
+          roleKey: null,
+        });
+        return order.id;
+      } catch (err) {
+        if (err instanceof OrderCreationError) {
+          if (err.code === "DUPLICATE_PO" && err.existingOrderNumber) {
+            throw new AgentActionError(err.status, agentDuplicatePoMessage(poNumber, err.existingOrderNumber, canOverrideDuplicatePo(roleKey)));
+          }
+          throw new AgentActionError(err.status, err.message);
+        }
+        if (isSerialConflict(err)) throw new AgentActionError(409, `${SERIAL_RACE_MESSAGE}.`);
+        throw err;
+      }
     }
     case "create_product": {
       const product = await prisma.product.create({
@@ -196,12 +236,20 @@ async function handleResolveAction(
     return res.status(400).json({ error: `This action was already ${action.status}.` });
   }
 
-  try {
-    let resultId: string | null = null;
-    if (outcome === "confirmed") {
-      resultId = await executeConfirmedAction(action.toolName, action.input as Record<string, unknown>, req.auth!.userId);
+  let resultId: string | null = null;
+  if (outcome === "confirmed") {
+    try {
+      resultId = await executeConfirmedAction(action.toolName, action.input as Record<string, unknown>, req.auth!.userId, req.auth!.roleKey);
+    } catch (err) {
+      // Invalid input / a real conflict: a client error with our own message; the action stays pending.
+      if (err instanceof AgentActionError) return res.status(err.status).json({ error: err.message });
+      // Anything else is an internal failure: keep the details in the server log, never in the response.
+      console.error("[agent] confirming action failed", { actionId: action.id, toolName: action.toolName }, err);
+      return res.status(500).json({ error: SAFE_ACTION_FAILED_MESSAGE });
     }
+  }
 
+  try {
     await prisma.agentPendingAction.update({
       where: { id: action.id },
       data: { status: outcome, resultId, resolvedAt: new Date() },
@@ -216,7 +264,9 @@ async function handleResolveAction(
 
     res.json({ status: outcome, resultId, messages: updated.messages });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    console.error("[agent] saving the action outcome failed", { actionId: action.id, outcome, resultId }, err);
+    // If a confirmed action already ran, say so: it must not be confirmed a second time.
+    return res.status(500).json({ error: resultId ? SAFE_ACTION_DONE_BUT_NOT_SAVED_MESSAGE : SAFE_ACTION_FAILED_MESSAGE });
   }
 }
 

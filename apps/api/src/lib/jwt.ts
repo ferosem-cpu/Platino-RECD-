@@ -19,10 +19,14 @@ export interface AuthTokenPayload {
   userId: string;
   roleKey: string;
   customerId?: string | null;
+  /** The user's tokenVersion when this token was issued (absent on tokens issued before revocation existed = 0). Not a credential. */
+  tv?: number;
 }
 
-export function signToken(payload: AuthTokenPayload): string {
-  return jwt.sign(payload, SECRET, { expiresIn: EXPIRES_IN } as jwt.SignOptions);
+/** `tokenVersion` is the user's current User.tokenVersion; a later security-sensitive change bumps it and so revokes this token. */
+export function signToken(payload: Omit<AuthTokenPayload, "tv"> & { tokenVersion?: number | null }): string {
+  const { tokenVersion, ...rest } = payload;
+  return jwt.sign({ ...rest, tv: tokenVersion ?? 0 }, SECRET, { expiresIn: EXPIRES_IN } as jwt.SignOptions);
 }
 
 export function verifyToken(token: string): AuthTokenPayload {

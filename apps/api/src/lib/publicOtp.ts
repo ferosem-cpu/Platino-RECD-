@@ -5,12 +5,9 @@
  */
 import { createHmac, randomBytes, randomInt, timingSafeEqual, createHash } from "crypto";
 import { PUBLIC_OTP } from "@recd/shared";
+import { otpHmacSecret } from "./otpSecret";
 
-function secret(): string {
-  const s = process.env.JWT_SECRET;
-  if (!s) throw new Error("JWT_SECRET is not set - cannot hash public OTP codes.");
-  return s;
-}
+const secret = otpHmacSecret; // OTP_HMAC_SECRET when set, otherwise JWT_SECRET (lib/otpSecret.ts)
 
 /** Cryptographically random 6-digit code (leading zeros preserved). */
 export function generateOtpCode(): string {
@@ -37,6 +34,24 @@ export function generateSessionToken(): { token: string; hash: string } {
 export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
+
+/**
+ * Delivery states of a PublicOtp row. A row is created "pending" and only becomes a usable code once the provider accepted it:
+ * "sent" (WhatsApp) or "skipped" (the explicit local-development echo, where the code is returned instead of sent).
+ * A "failed" or still "pending" row was never delivered, so it must neither be accepted nor hide an earlier delivered code.
+ */
+export const PUBLIC_OTP_DELIVERY = { PENDING: "pending", SENT: "sent", FAILED: "failed", SKIPPED: "skipped" } as const;
+export const PUBLIC_OTP_USABLE_DELIVERY: string[] = [PUBLIC_OTP_DELIVERY.SENT, PUBLIC_OTP_DELIVERY.SKIPPED];
+
+/** Database keys that serialise concurrent code requests for the same mobile / serial / address (see lib/advisoryLock.ts). */
+export const publicOtpLockKeys = (phone: string, serialNo: string, ip: string | null) => [
+  `public-otp:phone:${phone}`,
+  `public-otp:serial:${serialNo}`,
+  ...(ip ? [`public-otp:ip:${ip}`] : []),
+];
+
+/** Rows older than this are deleted (the request limits only look back one hour, a session lives 15 minutes). */
+export const PUBLIC_OTP_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export interface OtpRowState {
   expiresAt: Date;
@@ -79,11 +94,4 @@ export function decideOtpRequest(i: ThrottleInput): ThrottleDecision {
     return { allowed: false, reason: "limit", retryAfterSeconds: 3600 };
   }
   return { allowed: true };
-}
-
-/** Best-effort client IP. On Vercel x-forwarded-for is set by the platform. */
-export function clientIp(headers: Record<string, string | string[] | undefined>, fallback?: string): string | null {
-  const xff = headers["x-forwarded-for"];
-  const first = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim();
-  return first || (headers["x-real-ip"] as string | undefined) || fallback || null;
 }

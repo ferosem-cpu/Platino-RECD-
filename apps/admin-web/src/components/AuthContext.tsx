@@ -54,6 +54,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       setUser(data);
 
+      // An account that must change its password may only reach /auth/me and the change-password call: do not fire the rest.
+      if (data.mustChangePassword) return;
+
       try {
         const settings = await api<{ themeKey: string; logoDataUrl: string | null; customColors: any }>("/settings");
         if (typeof window !== "undefined") {

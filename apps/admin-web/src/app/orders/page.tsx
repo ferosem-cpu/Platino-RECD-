@@ -4,13 +4,17 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { apiErrorMessage, withoutFieldPrefix } from "@/lib/apiError";
+import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
+import { canOverrideDuplicatePo } from "@recd/shared";
 import { useAuth } from "@/components/AuthContext";
 import { DataTable } from "@/components/DataTable";
+import { formatOptionalRupees } from "@/lib/format";
 
 interface OrderRow {
   id: string;
   orderNumber: string;
-  value: string;
+  value: string | null;
   customer: { name: string };
   product: { name: string; model: string };
   lineItems: { product: { name: string; model: string } }[];
@@ -54,7 +58,9 @@ export default function OrdersPage() {
 }
 
 function OrdersPageInner() {
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  // Same role list the API enforces; hiding the box is a convenience only - POST /orders still decides.
+  const canOverridePo = canOverrideDuplicatePo(user?.role.key);
   const canManage = hasPermission("manage_orders");
   const searchParams = useSearchParams();
   const addSiteForCustomerId = searchParams.get("customer");
@@ -125,20 +131,27 @@ function OrdersPageInner() {
     e.preventDefault();
     setSaving(true);
     setFormError(null);
+    // Records created by THIS attempt only; if the order is then refused they are removed again, so a failed order leaves no orphan customer / product
+    // behind (and a retry does not pile up duplicates).
+    let createdCustomerId: string | null = null;
+    let createdProductId: string | null = null;
     try {
       let customerId = form.customerId;
       if (newCustomer) {
+        const phoneError = mobileFieldError(form.contactPhone);
+        if (phoneError) throw new Error(phoneError);
         const created = await api<{ id: string }>("/customers", {
           method: "POST",
           body: JSON.stringify({
             name: form.customerName,
             address: form.customerAddress || undefined,
             contactName: form.contactName,
-            contactPhone: form.contactPhone,
+            contactPhone: cleanMobile(form.contactPhone),
             contactEmail: form.contactEmail || undefined,
           }),
         });
         customerId = created.id;
+        createdCustomerId = created.id;
       }
       if (!customerId) throw new Error("Please choose or create a customer");
 
@@ -153,6 +166,7 @@ function OrdersPageInner() {
           }),
         });
         productId = created.id;
+        createdProductId = created.id;
       }
       if (!productId) throw new Error("Please choose or create a product");
       if (serialInputs.some((v) => !v.trim())) throw new Error(`Enter the RECD serial number for each of the ${qty} unit(s)`);
@@ -168,7 +182,7 @@ function OrdersPageInner() {
           value: parseFloat(form.value) || 0,
           poNumber: form.poNumber.trim(),
           poDate: form.poDate ? new Date(form.poDate).toISOString() : undefined,
-          allowDuplicatePo: form.allowDuplicatePo || undefined,
+          allowDuplicatePo: (canOverridePo && form.allowDuplicatePo) || undefined,
           recdSerials: serialInputs.map((v) => v.trim()),
           orderDate: new Date(form.orderDate).toISOString(),
           plannedExhaustHookupType: form.plannedExhaustHookupType,
@@ -196,7 +210,10 @@ function OrdersPageInner() {
       setSerials([""]);
       load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to create order");
+      // Best effort and safe: the API refuses to delete a customer / product that has any order, so this can only remove what this attempt made.
+      if (createdProductId) await api(`/products/${createdProductId}`, { method: "DELETE" }).catch(() => undefined);
+      if (createdCustomerId) await api(`/customers/${createdCustomerId}`, { method: "DELETE" }).catch(() => undefined);
+      setFormError(withoutFieldPrefix(apiErrorMessage(err, "Failed to create order"), "recdSerials"));
     } finally {
       setSaving(false);
     }
@@ -267,7 +284,7 @@ function OrdersPageInner() {
               </span>
             ),
           },
-          { key: "siteName", label: "Site name", accessor: (o) => o.site?.companyName ?? "", filterType: "text" },
+          { key: "siteName", label: "Site name", accessor: (o) => o.site?.companyName ?? "", render: (o) => o.site?.companyName ?? "Not set", filterType: "text" },
           { key: "customer", label: "Customer", accessor: (o) => o.customer.name },
           {
             key: "product",
@@ -289,7 +306,7 @@ function OrdersPageInner() {
             label: "Value",
             accessor: (o) => Number(o.value),
             filterType: "text",
-            render: (o) => <span className="whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</span>,
+            render: (o) => <span className="whitespace-nowrap">{formatOptionalRupees(o.value)}</span>,
           },
           { key: "stage", label: "Current stage", accessor: (o) => o.site?.currentStage.label ?? "" },
         ]}
@@ -307,14 +324,12 @@ function OrdersPageInner() {
                     <span className="font-mono text-xs font-semibold text-gray-900">{o.orderNumber}</span>
                     <span className="badge badge-accent">{o.site?.currentStage.label ?? "—"}</span>
                   </div>
-                  {o.site?.companyName && (
-                    <p className="text-sm font-semibold text-gray-900 truncate">{o.site.companyName}</p>
-                  )}
+                  <p className="text-sm font-semibold text-gray-900 truncate">{o.site?.companyName ?? "Not set"}</p>
                   <p className="text-xs text-gray-500 truncate">{o.customer.name}</p>
                   <p className="text-xs text-gray-500 mb-2 truncate">{allProducts(o).map((p) => `${p.name} (${p.model})`).join(", ")}</p>
                   <div className="data-card-row">
                     <span className="label">Value</span>
-                    <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>
+                    <span className="value font-semibold">{formatOptionalRupees(o.value)}</span>
                   </div>
                 </Link>
               ))
@@ -350,7 +365,7 @@ function OrdersPageInner() {
                     <input required placeholder="Company name" className="field w-full" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <input required placeholder="Contact name" className="field" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
-                      <input required placeholder="Contact phone (login)" className="field" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
+                      <input required inputMode="tel" title="10-digit Indian mobile number" placeholder="Contact mobile (login)" className="field" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
                     </div>
                     <input type="email" placeholder="Contact email (optional)" className="field w-full" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} />
                     <textarea placeholder="Address (optional)" rows={2} className="field w-full" value={form.customerAddress} onChange={(e) => setForm({ ...form, customerAddress: e.target.value })} />
@@ -415,10 +430,12 @@ function OrdersPageInner() {
                   <input type="date" className="field w-full" value={form.poDate} onChange={(e) => setForm({ ...form, poDate: e.target.value })} />
                 </div>
               </div>
+              {canOverridePo && (
               <label className="flex items-center gap-2 text-xs text-gray-500">
-                <input type="checkbox" checked={form.allowDuplicatePo} onChange={(e) => setForm({ ...form, allowDuplicatePo: e.target.checked })} />
-                Allow a duplicate PO for this customer (admins only - the order is flagged)
+                <input type="checkbox" data-testid="order-allow-duplicate-po" checked={form.allowDuplicatePo} onChange={(e) => setForm({ ...form, allowDuplicatePo: e.target.checked })} />
+                Allow a duplicate PO for this customer (the order is flagged)
               </label>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">RECD serial number{qty > 1 ? "s (one per unit)" : ""}</label>

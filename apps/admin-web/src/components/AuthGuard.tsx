@@ -6,6 +6,9 @@ import { useEffect, useState } from "react";
 import Nav from "./Nav";
 import BottomNav from "./BottomNav";
 import AgentChatBubble from "./AgentChatBubble";
+import AmcExpiryNotice from "./AmcExpiryNotice";
+import WarrantyExpiryNotice from "./WarrantyExpiryNotice";
+import { isCustomerReportPath, SERVICE_REPORT_LIST_PERMISSIONS } from "@/lib/routeAccess";
 
 /** Standalone pages that need no sign-in (no sidebar, no auth redirects). */
 const PUBLIC_PATHS = ["/vendor/register", "/report-issue"];
@@ -23,8 +26,12 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/users": ["manage_users"],
   "/settings": ["manage_settings"],
   "/amc-orders": ["manage_amc_orders"],
+  "/vendor-amcs": ["manage_amc_orders"],
   "/recd-units": ["view_site_status"],
   "/regions": ["manage_regions"],
+  "/reminders": ["view_complaints_overview", "manage_complaints"],
+  // Staff service-report list; the API decides which reports each user may see.
+  "/service-reports": [...SERVICE_REPORT_LIST_PERMISSIONS],
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
@@ -97,7 +104,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     }
 
     if (user.role.key === "customer") {
-      if (pathname !== "/customer/portal") router.push("/customer/portal");
+      if (pathname !== "/customer/portal" && !isCustomerReportPath(pathname)) router.push("/customer/portal");
       return;
     }
 
@@ -145,10 +152,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (user.role.key === "customer") {
-    return isCustomerPortal ? (
+    return isCustomerPortal || isCustomerReportPath(pathname) ? (
       <div className="min-h-screen bg-gray-50">
         {children}
         <AgentChatBubble />
+        <AmcExpiryNotice userId={user.id} canOpenAmc={false} />
+        <WarrantyExpiryNotice userId={user.id} linkToUnits={false} />
       </div>
     ) : null;
   }
@@ -199,6 +208,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       </div>
       <BottomNav onProfileClick={() => setMobileNavOpen(true)} />
       <AgentChatBubble />
+      <AmcExpiryNotice userId={user.id} canOpenAmc={user.permissions.includes("manage_amc_orders")} />
+      <WarrantyExpiryNotice userId={user.id} linkToUnits={user.permissions.includes("view_site_status")} />
     </div>
   );
 }

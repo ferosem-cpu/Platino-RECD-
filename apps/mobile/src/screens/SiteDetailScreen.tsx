@@ -3,6 +3,9 @@ import { View, Text, ScrollView, Pressable, TextInput, StyleSheet, Alert } from 
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import { api } from "@/lib/apiClient";
+import UnitSerials from "@/components/UnitSerials";
+import SiteContacts from "@/components/SiteContacts";
+import type { UnitForDisplay } from "@recd/shared";
 
 interface StageOption {
   id: string;
@@ -32,6 +35,10 @@ interface SiteDetail {
   confirmedExhaustHookupType: string | null;
   stageEvents: StageEvent[];
   photos: Array<{ id: string; checkpoint: { id: string; label: string }; photoUrl: string }>;
+  units?: UnitForDisplay[];
+  sitePocName?: string | null;
+  sitePocNumber?: string | null;
+  contacts?: Array<{ id: string; name: string; role: string | null; phone: string | null }>;
 }
 
 export default function SiteDetailScreen({ route }: { route: any }) {
@@ -60,10 +67,16 @@ export default function SiteDetailScreen({ route }: { route: any }) {
     setSelectedStage((prev) => prev ?? siteData.currentStage.id);
   }, [siteId]);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const refresh = useCallback(() => {
+    setLoadError(null);
+    load().catch((err) => setLoadError(err instanceof Error ? err.message : "Could not load this site."));
+  }, [load]);
+
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load]),
+      refresh();
+    }, [refresh]),
   );
 
   async function submitStageEvent() {
@@ -109,7 +122,15 @@ export default function SiteDetailScreen({ route }: { route: any }) {
     }
   }
 
-  if (!site) return <Text style={styles.empty}>Loading...</Text>;
+  if (!site) {
+    return loadError ? (
+      <Pressable onPress={refresh}>
+        <Text style={styles.error}>{loadError} Tap to retry.</Text>
+      </Pressable>
+    ) : (
+      <Text style={styles.empty}>Loading...</Text>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -119,6 +140,12 @@ export default function SiteDetailScreen({ route }: { route: any }) {
         Exhaust hookup - planned: {site.order.plannedExhaustHookupType ?? "-"}, confirmed:{" "}
         {site.confirmedExhaustHookupType ?? "not confirmed yet"}
       </Text>
+
+      <Text style={styles.section}>RECD serial number</Text>
+      <UnitSerials units={site.units} />
+
+      <Text style={styles.section}>Site contacts</Text>
+      <SiteContacts site={site} />
 
       <Text style={styles.section}>Update stage</Text>
       <View style={styles.chipRow}>
@@ -180,6 +207,7 @@ export default function SiteDetailScreen({ route }: { route: any }) {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   empty: { textAlign: "center", marginTop: 40, color: "#999" },
+  error: { textAlign: "center", marginTop: 40, color: "#dc2626" },
   title: { fontSize: 18, fontWeight: "600" },
   subtitle: { color: "#666", marginTop: 4, fontSize: 13 },
   section: { marginTop: 20, marginBottom: 8, fontWeight: "600", fontSize: 14 },

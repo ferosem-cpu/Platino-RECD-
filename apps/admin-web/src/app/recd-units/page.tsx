@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/apiClient";
+import { formatDay } from "@/lib/amcUi";
+import { warrantyStatusLabel, warrantyStatusPill, type UnitWarranty } from "@/lib/warrantyUi";
 
 interface UnitRow {
   id: string;
@@ -10,7 +12,8 @@ interface UnitRow {
   status: string;
   product: { name: string; model: string };
   order: { id: string; orderNumber: string; poNumber: string | null; customer: { name: string } };
-  site: { id: string; companyName: string | null; region: { name: string } | null } | null;
+  site: { id: string; companyName: string | null; dgModel: string | null; dgCapacityKva: string | number | null; region: { name: string } | null } | null;
+  warranty: UnitWarranty;
 }
 
 export default function RecdUnitsPage() {
@@ -48,7 +51,7 @@ function RecdUnitsInner() {
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>RECD units</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Every physical RECD by its unique serial number, with the customer, site and region it belongs to.
+          Every physical RECD by its unique serial number, with the customer, site, DG set and region it belongs to. Open a unit for its service history, reports and AMC.
         </p>
       </div>
 
@@ -76,29 +79,46 @@ function RecdUnitsInner() {
               <th className="px-3 py-2">Product</th>
               <th className="px-3 py-2">Customer</th>
               <th className="px-3 py-2">Site</th>
+              <th className="px-3 py-2">DG set</th>
               <th className="px-3 py-2">Region</th>
               <th className="px-3 py-2">Order / PO</th>
+              <th className="px-3 py-2">Warranty</th>
             </tr>
           </thead>
           <tbody>
             {units.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-gray-400">{loading ? "Loading…" : "No units found."}</td></tr>
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-400">{loading ? "Loading…" : "No units found."}</td></tr>
             )}
             {units.map((u) => (
               <tr key={u.id} className="border-b border-gray-50 last:border-0">
                 <td className="px-3 py-2 font-mono text-xs font-semibold">
-                  {u.serialNo ?? <span className="text-amber-600">pending</span>}
+                  {u.serialNo ? (
+                    <Link href={`/recd-units/${u.id}`} className="hover:underline">{u.serialNo}</Link>
+                  ) : (
+                    <Link href={`/recd-units/${u.id}`} className="text-amber-600 font-sans font-medium hover:underline" title="Legacy unit - the serial number has not been entered yet">
+                      Serial not entered
+                    </Link>
+                  )}
                   {u.status === "retired" && <span className="badge ml-1">retired</span>}
                 </td>
                 <td className="px-3 py-2">{u.product.name} ({u.product.model})</td>
                 <td className="px-3 py-2">{u.order.customer.name}</td>
                 <td className="px-3 py-2">
-                  {u.site ? <Link href={`/sites/${u.site.id}`} className="hover:underline">{u.site.companyName ?? "Site"}</Link> : "—"}
+                  {u.site ? <Link href={`/sites/${u.site.id}`} className="hover:underline">{u.site.companyName ?? "Not set"}</Link> : "—"}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {u.site?.dgModel || u.site?.dgCapacityKva != null
+                    ? [u.site?.dgModel, u.site?.dgCapacityKva != null ? `${u.site.dgCapacityKva} kVA` : null].filter(Boolean).join(" · ")
+                    : <span className="text-gray-400">Not recorded</span>}
                 </td>
                 <td className="px-3 py-2">{u.site?.region?.name ?? "—"}</td>
                 <td className="px-3 py-2">
                   <Link href={`/orders/${u.order.id}`} className="font-mono text-xs hover:underline">{u.order.orderNumber}</Link>
                   {u.order.poNumber && <span className="text-xs text-gray-400"> · PO {u.order.poNumber}</span>}
+                </td>
+                <td className="px-3 py-2 whitespace-nowrap" data-testid={`unit-warranty-${u.serialNo ?? u.id}`}>
+                  <span className={warrantyStatusPill(u.warranty.status)}>{warrantyStatusLabel(u.warranty.status)}</span>
+                  {u.warranty.endDate && <div className="text-[11px] text-gray-500 mt-0.5">to {formatDay(u.warranty.endDate)}</div>}
                 </td>
               </tr>
             ))}

@@ -3,11 +3,14 @@ import { View, Text, FlatList, Pressable, StyleSheet, RefreshControl } from "rea
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/context/AuthContext";
+import { unitSerialsSummary } from "@recd/shared";
 
 interface OrderRow {
   id: string;
   orderNumber: string;
   product: { name: string };
+  /** Serial of each RECD unit of the order (null on a legacy unit that has none yet). */
+  units?: Array<{ id: string; serialNo: string | null }>;
   site: { id: string; currentStage: { label: string } } | null;
 }
 
@@ -16,10 +19,15 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [error, setError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setRefreshing(true);
+    setError(null);
     try {
       setOrders(await api<OrderRow[]>("/orders"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load your orders.");
     } finally {
       setRefreshing(false);
     }
@@ -37,7 +45,15 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
         data={orders}
         keyExtractor={(item) => item.id}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}
-        ListEmptyComponent={<Text style={styles.empty}>No orders yet.</Text>}
+        ListEmptyComponent={
+          error ? (
+            <Pressable onPress={load}>
+              <Text style={styles.error}>{error} Tap to retry.</Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.empty}>No orders yet.</Text>
+          )
+        }
         renderItem={({ item }) => (
           <Pressable
             style={styles.card}
@@ -46,6 +62,7 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
           >
             <Text style={styles.cardTitle}>{item.orderNumber}</Text>
             <Text style={styles.cardSubtitle}>{item.product.name}</Text>
+            <Text style={styles.cardSerial} testID={`serials-${item.id}`}>S/N: {unitSerialsSummary(item.units)}</Text>
             <Text style={styles.cardStage}>{item.site?.currentStage.label ?? "Not yet scheduled"}</Text>
           </Pressable>
         )}
@@ -60,9 +77,11 @@ export default function MyOrdersScreen({ navigation }: { navigation: any }) {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   empty: { textAlign: "center", marginTop: 40, color: "#999" },
+  error: { textAlign: "center", marginTop: 40, color: "#dc2626" },
   card: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 14, marginBottom: 10 },
   cardTitle: { fontWeight: "600", fontSize: 15 },
   cardSubtitle: { color: "#666", marginTop: 2 },
+  cardSerial: { color: "#374151", marginTop: 2, fontSize: 12 },
   cardStage: { color: "#2563eb", marginTop: 6, fontSize: 13 },
   logout: { textAlign: "center", color: "#dc2626", padding: 12 },
 });

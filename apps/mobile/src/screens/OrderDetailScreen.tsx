@@ -2,6 +2,9 @@ import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, Pressable, StyleSheet, Image, Alert } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "@/lib/apiClient";
+import UnitSerials from "@/components/UnitSerials";
+import SiteContacts from "@/components/SiteContacts";
+import type { UnitForDisplay } from "@recd/shared";
 
 interface SiteDetail {
   id: string;
@@ -16,6 +19,10 @@ interface SiteDetail {
   }>;
   photos: Array<{ id: string; photoUrl: string; checkpoint: { label: string } }>;
   pendingActions: Array<{ id: string; description: string; status: string; category: string }>;
+  units?: UnitForDisplay[];
+  sitePocName?: string | null;
+  sitePocNumber?: string | null;
+  contacts?: Array<{ id: string; name: string; role: string | null; phone: string | null }>;
 }
 
 export default function OrderDetailScreen({ route, navigation }: { route: any; navigation: any }) {
@@ -26,10 +33,16 @@ export default function OrderDetailScreen({ route, navigation }: { route: any; n
     setSite(await api<SiteDetail>(`/sites/${siteId}`));
   }, [siteId]);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const refresh = useCallback(() => {
+    setLoadError(null);
+    load().catch((err) => setLoadError(err instanceof Error ? err.message : "Could not load this order."));
+  }, [load]);
+
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load]),
+      refresh();
+    }, [refresh]),
   );
 
   async function resolvePendingAction(actionId: string, resolution: "keep_existing" | "replace_with_recd") {
@@ -41,13 +54,27 @@ export default function OrderDetailScreen({ route, navigation }: { route: any; n
     }
   }
 
-  if (!site) return <Text style={styles.empty}>Loading...</Text>;
+  if (!site) {
+    return loadError ? (
+      <Pressable onPress={refresh}>
+        <Text style={styles.error}>{loadError} Tap to retry.</Text>
+      </Pressable>
+    ) : (
+      <Text style={styles.empty}>Loading...</Text>
+    );
+  }
   const openActions = site.pendingActions.filter((a) => a.status === "open");
 
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>{site.order.orderNumber}</Text>
       <Text style={styles.subtitle}>Current stage: {site.currentStage.label}</Text>
+
+      <Text style={styles.section}>RECD serial number</Text>
+      <UnitSerials units={site.units} />
+
+      <Text style={styles.section}>Site contacts</Text>
+      <SiteContacts site={site} />
 
       {openActions.map((action) => (
         <View key={action.id} style={styles.pendingCard}>
@@ -96,6 +123,7 @@ export default function OrderDetailScreen({ route, navigation }: { route: any; n
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   empty: { textAlign: "center", marginTop: 40, color: "#999" },
+  error: { textAlign: "center", marginTop: 40, color: "#dc2626" },
   title: { fontSize: 18, fontWeight: "600" },
   subtitle: { color: "#666", marginTop: 4, fontSize: 13 },
   section: { marginTop: 20, marginBottom: 8, fontWeight: "600", fontSize: 14 },

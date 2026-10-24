@@ -4,17 +4,20 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString } from "../lib/params";
+import { CUSTOMER_REF_SELECT, SITE_ORDER_SELECT } from "../lib/safeSelect";
 
 export const pendingActionsRouter = Router();
 pendingActionsRouter.use(authenticate);
 
 pendingActionsRouter.get("/", requirePermission(PERMISSION_KEY.RESOLVE_PENDING_ACTION), async (req: AuthenticatedRequest, res) => {
-  const where = req.auth!.customerId
-    ? { status: "open", site: { order: { customerId: req.auth!.customerId } } }
-    : { status: "open" };
+  // Customers see only their own sites' actions; a vendor-scoped user only those on their vendor's sites.
+  const siteScope: Record<string, unknown> = {};
+  if (req.auth!.customerId) siteScope.order = { customerId: req.auth!.customerId };
+  if (req.auth!.vendorId) siteScope.vendorId = req.auth!.vendorId;
+  const where = Object.keys(siteScope).length ? { status: "open", site: siteScope } : { status: "open" };
   const actions = await prisma.pendingAction.findMany({
     where,
-    include: { site: { include: { order: { include: { customer: true } } } } },
+    include: { site: { include: { order: { select: { ...SITE_ORDER_SELECT, customer: { select: CUSTOMER_REF_SELECT } } } } } },
     orderBy: { createdAt: "desc" },
   });
   res.json(actions);
@@ -33,8 +36,15 @@ pendingActionsRouter.post(
     const parsed = resolvePendingActionSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const action = await prisma.pendingAction.findUnique({ where: { id: asString(req.params.id) }, include: { site: true } });
+    const action = await prisma.pendingAction.findUnique({
+      where: { id: asString(req.params.id) },
+      include: { site: { select: { vendorId: true, order: { select: { customerId: true } } } } },
+    });
     if (!action) return res.status(404).json({ error: "Pending action not found" });
+    // Record-level check: the id comes from the URL, so a customer / vendor user may only resolve actions on their own sites
+    // (unscoped staff such as project managers keep working across sites). A foreign id answers 404, exactly like an unknown one.
+    if (req.auth!.customerId && action.site.order.customerId !== req.auth!.customerId) return res.status(404).json({ error: "Pending action not found" });
+    if (req.auth!.vendorId && action.site.vendorId !== req.auth!.vendorId) return res.status(404).json({ error: "Pending action not found" });
 
     const updated = await prisma.pendingAction.update({
       where: { id: action.id },

@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { useAuth } from "@/components/AuthContext";
-import { api } from "@/lib/apiClient";
+import { api, setToken } from "@/lib/apiClient";
+import { apiErrorMessage } from "@/lib/apiError";
+import { MIN_PASSWORD_LENGTH } from "@recd/shared";
 
 export default function ChangePasswordPage() {
   const { refresh, logout } = useAuth();
@@ -22,23 +24,25 @@ export default function ChangePasswordPage() {
       return;
     }
 
-    if (newPassword.length < 6) {
-      setError("New password must be at least 6 characters long");
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      setError(`New password must be at least ${MIN_PASSWORD_LENGTH} characters long`);
       return;
     }
 
     setLoading(true);
     try {
-      await api("/auth/change-password", {
+      // Changing the password signs out every other session of this account; the answer carries a fresh token for this one.
+      const result = await api<{ ok: boolean; token?: string }>("/auth/change-password", {
         method: "POST",
         body: JSON.stringify({ currentPassword, newPassword }),
       });
+      if (result?.token) setToken(result.token);
       setSuccess(true);
       setTimeout(async () => {
         await refresh();
       }, 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to change password");
+      setError(apiErrorMessage(err, "Failed to change password"));
     } finally {
       setLoading(false);
     }
