@@ -1428,3 +1428,32 @@ Before a future migration adds `NOT NULL`: (1) count and list the affected rows 
 - **Full regression (after this section's changes, this run):** shared 115/115, api (mocked) 610/610, api (real database, `localhost:5434/platino_test`) 324/324 (54 of them in `ticketAdmin.db.test.ts`, including the 3 new tests above), admin-web 146/146, mobile 7/7; `tsc --noEmit` clean in shared / api / admin-web / mobile. One earlier solo run of the real-database suite showed a single unrelated assertion-count mismatch (`actual: 18, expected: 20`) that did not reproduce on an immediate full rerun (324/324) or in the targeted rerun of just `ticketAdmin.db.test.ts` (54/54); it was not chased further since it did not recur, and it is noted here rather than hidden.
 - **Not verified:** real e-mail/WhatsApp delivery (still mocked everywhere, as in every earlier R11 section), a browser walk-through of the customer portal's ticket list or the staff ticket-history screen, and real concurrent cron execution.
 - **R1-R10:** not touched by this section; re-verified by the full suites above (userAdmin, serialRules, recdUnitLinks, reminders, serviceReports/Amc, orderCreation/cloneOrderPo, dashboardScope all still pass).
+
+
+## 2026-10-24 - Production DB migration for PR #7 (R1-R11) and deploy state
+
+**Why R1-R11 was not visible:** the work lived only in PR #7 (`feature/my-service-improvements`). Production runs `master`. Vercel also refuses Git deploys of
+commits by authors who are not on the Vercel team ("Authorization required to deploy"), so the PR only ever produced hand-deployed previews, and the
+last web preview (47fe09b) predates the Service Reports sidebar commit (58ae910).
+
+**Database (`platino-recd-mumbai`, ap-south-1): all 19 PR #7 migrations applied on 2026-10-24**, in timestamp order, from `20261015120000_amc_order_units`
+to `20261101090000_signed_report_immutability`. They were applied with the Supabase MCP (Prisma engines cannot be downloaded in the Claude sandbox),
+and each was recorded in `_prisma_migrations` with the sha256 of its `migration.sql`, so `prisma migrate deploy` sees them as applied. 31 migrations in total.
+Row counts before and after were identical (24 users, 3 complaints, 1 unit, 1 AMC order). The one AMC order was backfilled with `datesSource = 'legacy_po_date'`.
+`manage_warranty` permission was added for super_admin, owner_admin and management.
+
+**Data fix needed to apply `20261023090000_user_admin_hardening`:** five inactive `raji_tester` users shared the email `testerraji@platino.com`
+(created within 3 seconds on 2026-10-23, nothing referenced them). The first (`cmvkcvmj20001c9hbsyrmsk05`) was kept unchanged. The other four
+(`cmvkcvmjt0001kbwfrh8s6c3y`, `cmvkcvmnr0001opy080d0brkf`, `cmvkcvmpt0003kbwft9yclpl8`, `cmvkcvoqb000171m682gu2v0h`) were renamed to
+`duplicate-<id>-testerraji@platino.com.invalid`, not deleted. They can be deleted later if wanted.
+
+**Side effects to know about:** all unconsumed OTP codes were voided (migration `20261016090000`); the case-insensitive unique email index
+`User_email_normalized_key` now exists; `Complaint_one_open_per_unit` was recreated to ignore archived tickets.
+
+**Open follow-ups**
+- DONE: PR #7 merged to master as 76aaab3 and deployed to production the same day (`platino-recd-api` dpl_H2syTG5fKDLHVboDCnU9qmQRhLxm, `platino-recd-admin-web` dpl_CMF7Vq7yLb5XZxPNkwSg8xfFhsKx, both READY; API `/health` returns ok, no runtime errors at the time of writing). Not yet checked in a browser: the Service Reports screens and the customer OTP login.
+- Aafiya's GitHub account is not on the Vercel team, so Vercel refuses Git deploys of her own commits. Add her to the team, or merge her work under an authorized account.
+- 8 new tables have no row-level security yet: ServiceReport, ReportFile, ServiceReportEvent, RegionManagerAudit, AmcVisit, ServiceReminder,
+  ServiceReminderEvent (the other new tables enable RLS in their own migrations). Run `ALTER TABLE "<name>" ENABLE ROW LEVEL SECURITY;` for each, then re-check `get_advisors`.
+- The new crons (`/reminders/cron/run`, `/warranty/cron/send-reminders`) start after the API deploys.
+- Rollback: the code can be rolled back in Vercel without touching the database, since the migrations are additive apart from the constraint swaps.
